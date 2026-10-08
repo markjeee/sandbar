@@ -1,0 +1,55 @@
+#!/bin/sh
+# The same Go checks run locally and in CI. Outputs stay in the native sandbox.
+set -eu
+umask 077
+
+integration=0
+case "$#:$*" in
+    0:) ;;
+    1:--integration) integration=1 ;;
+    *) echo "Usage: scripts/check [--integration]" >&2; exit 1 ;;
+esac
+
+project_dir=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
+cd "$project_dir"
+check_dir="$project_dir/.sandbox/check"
+tool_dir="$project_dir/.sandbox/tools"
+mkdir -p "$check_dir" "$tool_dir"
+
+printf '%s\n' 'Checking formatting and shell syntax'
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+    printf 'Run gofmt on:\n%s\n' "$unformatted" >&2
+    exit 1
+fi
+sh -n scripts/dev
+sh -n scripts/check
+
+printf '%s\n' 'Checking module consistency and vet'
+go mod tidy -diff
+go vet ./...
+
+printf '%s\n' 'Installing pinned development tools into .sandbox/tools'
+GOBIN="$tool_dir" go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+GOBIN="$tool_dir" go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+
+printf '%s\n' 'Running Staticcheck'
+"$tool_dir/staticcheck" ./...
+
+printf '%s\n' 'Running shuffled race tests and collecting in-process coverage'
+# GOFLAGS also instruments the CLI binaries built by integration tests.
+CGO_ENABLED=1 GOFLAGS="${GOFLAGS:+$GOFLAGS }-race" SANDBAR_INTEGRATION="$integration" \
+    go test -count=1 -shuffle=on -timeout=3m -covermode=atomic \
+    -coverprofile="$check_dir/coverage.out" ./...
+go tool cover -func="$check_dir/coverage.out"
+
+printf '%s\n' 'Fuzzing configuration for 10 seconds with two workers'
+SANDBAR_INTEGRATION=0 go test -run='^$' -fuzz='^FuzzConfig$' -fuzztime=10s \
+    -parallel=2 -timeout=1m .
+
+printf '%s\n' 'Checking reachable Go vulnerabilities'
+"$tool_dir/govulncheck" ./...
+
+printf '%s\n' 'Building the static Linux executable'
+CGO_ENABLED=0 go build -trimpath -o "$check_dir/sandbar" .
+printf 'Checks passed. Coverage: %s/coverage.out\n' "$check_dir"

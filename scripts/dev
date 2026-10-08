@@ -1,0 +1,35 @@
+#!/bin/sh
+# Native development only. Runtime files and the build stay in this checkout.
+set -eu
+umask 077
+
+if [ "$#" -ne 1 ]; then
+    echo "Usage: scripts/dev {init|start|stop}" >&2
+    exit 1
+fi
+case "$1" in
+    init|start|stop) ;;
+    *) echo "Usage: scripts/dev {init|start|stop}" >&2; exit 1 ;;
+esac
+
+project_dir=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
+sandbox_home="$project_dir/.sandbox"
+sandbox_binary="$sandbox_home/sandbar"
+
+if [ "$1" = stop ]; then
+    if [ ! -x "$sandbox_binary" ]; then
+        echo "Development executable is missing. Run scripts/dev init first." >&2
+        exit 1
+    fi
+    exec "$sandbox_binary" --home "$sandbox_home" stop
+fi
+
+cd "$project_dir"
+mkdir -p "$sandbox_home"
+CGO_ENABLED=0 go build -o "$sandbox_binary" .
+"$sandbox_binary" --home "$sandbox_home" init \
+    --http-port 18080 --https-port 18443 dev.sandbar.localhost 18000
+
+if [ "$1" = start ]; then
+    exec "$sandbox_binary" --home "$sandbox_home" start
+fi
