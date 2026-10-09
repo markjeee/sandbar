@@ -16,15 +16,15 @@ CGO_ENABLED=0 go build -o sandbar .
 ## Configuration
 
 ```sh
-./sandbar init netbox.sandbar.localhost 8000
+./sandbar init app.sandbar.localhost 8000
 ```
 
-HTTP port 80 redirects to HTTPS port 443. The HTTPS URL is `https://netbox.sandbar.localhost`.
+HTTP port 80 redirects to HTTPS port 443. The HTTPS URL is `https://app.sandbar.localhost`.
 The upstream, HTTP, and HTTPS ports must differ.
 Flags must precede positional arguments.
 
 ```sh
-./sandbar --home /tmp/sandbar-demo init --http-port 8080 --https-port 8443 netbox.sandbar.localhost 8000
+./sandbar --home /tmp/sandbar-demo init --http-port 8080 --https-port 8443 app.sandbar.localhost 8000
 ```
 
 Home selection uses `--home`, then `SANDBAR_HOME`, then Linux defaults:
@@ -43,7 +43,7 @@ The source has five fields:
 ```json
 {
   "version": 1,
-  "hostname": "netbox.sandbar.localhost",
+  "hostname": "app.sandbar.localhost",
   "upstream_port": 8000,
   "http_port": 80,
   "https_port": 443
@@ -83,9 +83,26 @@ It retains configuration, logs, and certificate material.
 
 Ports 80 and 443 need operating-system permission.
 On Linux, Caddy can require `CAP_NET_BIND_SERVICE`. See [Caddy's low-port guidance](https://caddyserver.com/docs/quick-starts/reverse-proxy).
-Sandbar never changes capabilities or elevates privileges.
+Sandbar lifecycle commands never change capabilities or elevate privileges.
 Stop DDEV or another competing router before using the same addresses and ports.
 Sandbar does not stop other routers or select alternate ports after a conflict.
+
+## Browser trust
+
+Use `trust` and `untrust` explicitly for the CA belonging to the selected Sandbar home:
+
+```sh
+./sandbar trust
+./sandbar untrust
+```
+
+Both commands accept no command arguments and use the same home precedence as lifecycle commands.
+`trust` needs the selected Caddy instance running. `untrust` uses its stored public root and works after stop.
+Trust stores belong to the caller's environment. **`--home` selects a CA and does not isolate trust stores.**
+Caddy can request elevated access and can attempt changes to user, system, Firefox, and Java stores.
+A failure can leave partial changes. Command success does not prove Chrome trust or complete trust removal.
+See [Ubuntu Chrome setup and exact-certificate cleanup](docs/browser-trust.md) before requesting trust changes.
+For development, use the [isolated Chrome MCP proof](docs/browser-proof.md), which changes only disposable NSS state.
 
 ## Native development sandbox
 
@@ -145,6 +162,7 @@ Automated integration tests continue to use disposable homes and dynamically all
 ## Isolated curl proof
 
 Use Python 3 for a disposable backend and curl for the request.
+NetBox is an optional example name in this proof. The backend is generic and needs no NetBox installation.
 Run these commands from this checkout after building `./sandbar`.
 Ports 18000, 8080, and 8443 must be free. Use another upstream port if 18000 is occupied.
 
@@ -226,7 +244,8 @@ Native tests use temporary homes and high ports. They stop only the Caddy instan
 They verify certificate trust, redirects, forwarded headers, private state, loopback listeners, and shutdown.
 IPv6 and non-loopback checks report explicit skips only when the required interface is unavailable.
 The Ubuntu CI job pins Caddy v2.11.7 and Go 1.27.1.
-macOS support and browser trust setup are deferred.
+macOS support remains deferred. Chrome acceptance follows the separate [isolated browser proof](docs/browser-proof.md).
+Trust-command tests use fake Caddy. They do not change personal or system trust stores.
 
 These choices follow [Go security guidance](https://go.dev/doc/security/best-practices),
 [Go fuzzing guidance](https://go.dev/doc/security/fuzz/), and [Staticcheck usage](https://staticcheck.dev/docs/getting-started/).
@@ -239,3 +258,16 @@ In-process statement coverage was 90.1%. The ten-second fuzz run completed 84,23
 Govulncheck found no known vulnerabilities. All four Caddyfile fixtures passed real Caddy validation.
 IPv6 and non-loopback checks both ran. The curl proof returned HTTP 308, then verified HTTPS 200 from the disposable backend.
 The GitHub Actions job was added but has not run remotely.
+
+### Phase 2 verification
+
+On 2026-10-08, local Phase 2 checks passed on Ubuntu 24.04 with Caddy v2.11.7, native Chrome 154.0.8037.97, and Chrome DevTools MCP 1.10.1.
+`scripts/check --integration` passed formatting, module checks, vet, Staticcheck, shuffled race tests, native acceptance, fuzzing, govulncheck, and the static Linux build.
+In-process coverage was 90.6%. Fuzzing completed 158,044 executions without failure. Govulncheck found no known vulnerabilities.
+
+Fresh Chrome processes rejected the target before import, followed HTTP 308 to HTTPS 200 after import, and rejected it after removal.
+The redirect retained the path and query. A distinct control root with the same subject remained trusted and its route still worked.
+Watched personal and system certificate-file hashes stayed unchanged. Temporary profiles, NSS state, CA keys, and router state were removed.
+
+CLI trust delegation used fake Caddy tests. Real browser verification used direct imports into a disposable NSS database.
+Real system-store installation, removal, and privilege prompts remain untested. Remote CI has not run for Phase 2.

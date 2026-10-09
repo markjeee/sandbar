@@ -55,6 +55,15 @@ case "$1" in
     printf '%s\n' "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" > "$FAKE_ENV"
     umask >> "$FAKE_ENV"
     exit "${FAKE_START_EXIT:-0}" ;;
+  trust|untrust)
+    printf '%s\n' "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" > "$FAKE_ENV"
+    if [ -n "$FAKE_READ_INPUT" ]; then
+      IFS= read -r input
+      printf 'input: %s\n' "$input"
+    fi
+    printf '%s\n' "$1 output"
+    printf '%s\n' "${FAKE_DIAGNOSTIC:-$1 diagnostic}" >&2
+    exit "${FAKE_TRUST_EXIT:-0}" ;;
   stop) printf '%s\n' 'stop output'; printf '%s\n' 'stop diagnostic' >&2; exit "${FAKE_STOP_EXIT:-0}" ;;
   *) exit 99 ;;
 esac
@@ -66,7 +75,7 @@ esac
 	t.Setenv("FAKE_CALLS", calls)
 	t.Setenv("FAKE_ENV", filepath.Join(bin, "environment"))
 	t.Setenv("FAKE_VERSION", "v2.11.7 h1:test")
-	for _, key := range []string{"FAKE_VERSION_EXIT", "FAKE_VALIDATE_EXIT", "FAKE_START_EXIT", "FAKE_STOP_EXIT", "FAKE_DIAGNOSTIC"} {
+	for _, key := range []string{"FAKE_VERSION_EXIT", "FAKE_VALIDATE_EXIT", "FAKE_START_EXIT", "FAKE_STOP_EXIT", "FAKE_TRUST_EXIT", "FAKE_READ_INPUT", "FAKE_DIAGNOSTIC"} {
 		t.Setenv(key, "")
 	}
 	return calls
@@ -137,13 +146,13 @@ func TestCaddyVersions(t *testing.T) {
 	fakeCaddy(t)
 	for _, version := range []string{"v2.11.7 h1:test", "v2.11.8", "v2.12.0", "v2.11.7+custom"} {
 		t.Setenv("FAKE_VERSION", version)
-		if err := checkCaddy(p, io.Discard); err != nil {
+		if err := checkCaddy(caddyEnv(p), io.Discard); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, version := range []string{"", "dev", "v2.11.6", "v2.10.99", "v1.99.99", "v3.0.0", "v2.11.7-rc.1", "v2.11.7junk"} {
 		t.Setenv("FAKE_VERSION", version)
-		if err := checkCaddy(p, io.Discard); err == nil || !strings.Contains(err.Error(), "v2.11.7 or later v2") {
+		if err := checkCaddy(caddyEnv(p), io.Discard); err == nil || !strings.Contains(err.Error(), "v2.11.7 or later v2") {
 			t.Fatalf("%q: %v", version, err)
 		}
 	}

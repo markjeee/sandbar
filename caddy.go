@@ -23,10 +23,10 @@ type caddyError struct {
 func (e *caddyError) Error() string { return e.err.Error() }
 func (e *caddyError) Unwrap() error { return e.err }
 
-// invokeCaddy is the single subprocess boundary. Caddy owns lifecycle behavior.
-func invokeCaddy(p paths, out, errOut io.Writer, args ...string) error {
+// invokeCaddy is the single subprocess boundary. Caddy owns command behavior.
+func invokeCaddy(env []string, in io.Reader, out, errOut io.Writer, args ...string) error {
 	cmd := exec.Command("caddy", args...)
-	cmd.Env = caddyEnv(p)
+	cmd.Env, cmd.Stdin = env, in
 	cmd.Stdout, cmd.Stderr = out, errOut
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
@@ -54,9 +54,9 @@ func caddyEnv(p paths) []string {
 
 var caddyVersionPattern = regexp.MustCompile(`^v2\.([0-9]+)\.([0-9]+)(\+[A-Za-z0-9.-]+)?$`)
 
-func checkCaddy(p paths, errOut io.Writer) error {
+func checkCaddy(env []string, errOut io.Writer) error {
 	var out bytes.Buffer
-	if err := invokeCaddy(p, &out, errOut, "version"); err != nil {
+	if err := invokeCaddy(env, nil, &out, errOut, "version"); err != nil {
 		return err
 	}
 	fields := strings.Fields(out.String())
@@ -145,7 +145,7 @@ func validateAndReplace(p paths, content string, out, errOut io.Writer) error {
 	if err := errors.Join(writeErr, closeErr); err != nil {
 		return err
 	}
-	if err := invokeCaddy(p, out, errOut, "validate", "--config", file.Name(), "--adapter", "caddyfile"); err != nil {
+	if err := invokeCaddy(caddyEnv(p), nil, out, errOut, "validate", "--config", file.Name(), "--adapter", "caddyfile"); err != nil {
 		return err
 	}
 	return os.Rename(file.Name(), p.file("Caddyfile"))
@@ -176,7 +176,7 @@ func start(p paths, out, errOut io.Writer) error {
 	if err := checkAdminSocket(p); err != nil {
 		return err
 	}
-	if err := checkCaddy(p, errOut); err != nil {
+	if err := checkCaddy(caddyEnv(p), errOut); err != nil {
 		return err
 	}
 	ipv6, err := ipv6Available(probeIPv6, errOut)
@@ -199,7 +199,7 @@ func start(p paths, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := invokeCaddy(p, log, log, "start", "--config", p.file("Caddyfile"), "--adapter", "caddyfile", "--pidfile", p.file("caddy.pid")); err != nil {
+	if err := invokeCaddy(caddyEnv(p), nil, log, log, "start", "--config", p.file("Caddyfile"), "--adapter", "caddyfile", "--pidfile", p.file("caddy.pid")); err != nil {
 		// Read only this attempt's diagnostics. Never attach a pipe to the daemon.
 		if _, seekErr := log.Seek(offset, io.SeekStart); seekErr == nil {
 			_, _ = io.Copy(errOut, log)
@@ -218,5 +218,5 @@ func stop(p paths, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return invokeCaddy(p, out, errOut, "stop", "--address", address)
+	return invokeCaddy(caddyEnv(p), nil, out, errOut, "stop", "--address", address)
 }

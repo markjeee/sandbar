@@ -20,6 +20,8 @@ Usage:
   sandbar [--home <directory>] init [--http-port <port>] [--https-port <port>] <hostname> <upstream-port>
   sandbar [--home <directory>] start
   sandbar [--home <directory>] stop
+  sandbar [--home <directory>] trust
+  sandbar [--home <directory>] untrust
   sandbar --version
 
 Flags must precede positional arguments. Hostnames must be below sandbar.localhost.
@@ -30,7 +32,10 @@ Home precedence: --home, SANDBAR_HOME, then Linux XDG directories.
 Init preserves existing config.json. Edit that source file while stopped.
 Start regenerates the Caddyfile. Do not edit the generated file.
 Start and stop delegate to installed Caddy. Only Caddy stays running.
-No system DNS or certificate trust changes are made.
+Lifecycle commands leave system DNS and certificate trust unchanged.
+Trust and untrust select this home's CA, using the caller's trust stores.
+Caddy can request elevated access. Command success does not verify browser trust.
+See the browser guide for verification, manual import, and complete removal.
 `
 
 func main() {
@@ -76,7 +81,7 @@ func execute(args []string, out, errOut io.Writer) error {
 		return nil
 	}
 	command, rest := flags.Arg(0), flags.Args()[1:]
-	if command != "init" && command != "start" && command != "stop" {
+	if command != "init" && command != "start" && command != "stop" && command != "trust" && command != "untrust" {
 		return fmt.Errorf("unknown command %q (use --help)", command)
 	}
 	if command != "init" && len(rest) != 0 {
@@ -90,10 +95,14 @@ func execute(args []string, out, errOut io.Writer) error {
 		return initialize(paths, rest, out, errOut)
 	}
 	return withLock(paths, func() error {
-		if command == "start" {
+		switch command {
+		case "start":
 			return start(paths, out, errOut)
+		case "stop":
+			return stop(paths, out, errOut)
+		default:
+			return changeTrust(paths, command, out, errOut)
 		}
-		return stop(paths, out, errOut)
 	})
 }
 

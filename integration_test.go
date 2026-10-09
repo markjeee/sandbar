@@ -56,7 +56,7 @@ func TestIntegrationGoldenValidation(t *testing.T) {
 			if !strings.Contains(content, "skip_install_trust") {
 				t.Fatal("fixture permits trust installation")
 			}
-			if err := checkCaddy(p, io.Discard); err != nil {
+			if err := checkCaddy(caddyEnv(p), io.Discard); err != nil {
 				t.Fatal(err)
 			}
 			if err := validateAndReplace(p, content, io.Discard, os.Stderr); err != nil {
