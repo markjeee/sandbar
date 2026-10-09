@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,7 +17,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func validConfig() config { return config{1, "netbox.sandbar.localhost", 8000, 80, 443} }
+func validConfig() config {
+	return config{Version: 1, Hostname: "netbox.sandbar.localhost", UpstreamPort: 8000, HTTPPort: 80, HTTPSPort: 443}
+}
 
 func cli(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
@@ -46,7 +49,7 @@ func TestConfigValidation(t *testing.T) {
 		})
 	}
 	for _, mutate := range []func(*config){
-		func(c *config) { c.Version = 2 }, func(c *config) { c.HTTPPort = 0 },
+		func(c *config) { c.Version = 3 }, func(c *config) { c.HTTPPort = 0 },
 		func(c *config) { c.HTTPSPort = 65536 }, func(c *config) { c.UpstreamPort = -1 },
 		func(c *config) { c.UpstreamPort = c.HTTPPort }, func(c *config) { c.UpstreamPort = c.HTTPSPort },
 		func(c *config) { c.HTTPPort = c.HTTPSPort },
@@ -99,7 +102,7 @@ func TestInit(t *testing.T) {
 	}
 	p := testPaths(t, home)
 	c, err := readConfig(p.config)
-	if err != nil || c != validConfig() {
+	if err != nil || !reflect.DeepEqual(c.Routes, []route{{"netbox.sandbar.localhost", "http://127.0.0.1:8000"}}) || c.Version != 2 {
 		t.Fatalf("%+v %v", c, err)
 	}
 	before, err := os.Stat(p.config)
@@ -124,7 +127,7 @@ func TestInit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != c {
+	if !reflect.DeepEqual(got, c) {
 		t.Fatal("changed existing config")
 	}
 	for path, mode := range map[string]os.FileMode{home: 0700, p.state: 0700, p.config: 0600, p.file("router.lock"): 0600} {
@@ -165,7 +168,7 @@ func TestInitOverridesAndInvalidArguments(t *testing.T) {
 		t.Fatal(c)
 	}
 	for _, args := range [][]string{
-		{"init"}, {"init", "netbox.sandbar.localhost", "abc"}, {"init", "bad", "8000"},
+		{"init", "one"}, {"init", "netbox.sandbar.localhost", "abc"}, {"init", "bad", "8000"},
 		{"init", "--http-port", "8000", "netbox.sandbar.localhost", "8000"},
 		{"init", "netbox.sandbar.localhost", "8000", "--http-port", "8080"},
 		{"start", "extra"}, {"stop", "extra"}, {"unknown"},
@@ -270,14 +273,17 @@ func FuzzConfig(f *testing.F) {
 			t.Fatal(err)
 		}
 		roundTrip, err := decodeConfig(bytes.NewReader(encoded))
-		if err != nil || roundTrip != c {
+		if err != nil || !reflect.DeepEqual(roundTrip, c) {
 			t.Fatalf("unstable config round trip: %+v, %v", roundTrip, err)
+		}
+		if len(c.Routes) == 0 {
+			return
 		}
 		target, err := url.Parse(c.httpsURL())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if target.Scheme != "https" || target.Hostname() != c.Hostname || target.User != nil || target.Path != "" || target.RawQuery != "" || target.Fragment != "" {
+		if target.Scheme != "https" || target.Hostname() != c.Routes[0].Hostname || target.User != nil || target.Path != "" || target.RawQuery != "" || target.Fragment != "" {
 			t.Fatalf("configuration changed URL authority: %q", c.httpsURL())
 		}
 	})

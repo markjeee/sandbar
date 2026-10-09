@@ -49,6 +49,12 @@ printf '%s\n' -- >> "$FAKE_CALLS"
 case "$1" in
   version) printf '%s\n' "$FAKE_VERSION"; exit "${FAKE_VERSION_EXIT:-0}" ;;
   validate) printf '%s\n' 'validate output'; printf '%s\n' 'validate diagnostic' >&2; exit "${FAKE_VALIDATE_EXIT:-0}" ;;
+  adapt) printf '%s\n' '{"test":"candidate"}';;
+  reload)
+    if [ -n "$FAKE_ACTIVE_FILE" ] && [ -n "$FAKE_ACTIVE_AFTER_RELOAD" ]; then
+      printf '%s' "$FAKE_ACTIVE_AFTER_RELOAD" > "$FAKE_ACTIVE_FILE"
+    fi
+    exit "${FAKE_RELOAD_EXIT:-0}" ;;
   start)
     printf '%s\n' 'start output'
     printf '%s\n' "${FAKE_DIAGNOSTIC:-start diagnostic}" >&2

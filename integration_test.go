@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -74,7 +75,7 @@ func buildCLI(t *testing.T) string {
 	bin := filepath.Join(shortHome(t), "sandbar")
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", bin, ".")
+	cmd := exec.CommandContext(ctx, "go", "build", "-race", "-o", bin, ".")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
 	}
@@ -248,7 +249,7 @@ func TestIntegrationLifecycle(t *testing.T) {
 	waitForTLS(t, client, c.httpsURL()+"/ready")
 	before := requests.Load()
 	uri := "/api/items%20here?limit=1&value=a%2Fb"
-	httpURL := fmt.Sprintf("http://%s:%d%s", c.Hostname, c.HTTPPort, uri)
+	httpURL := fmt.Sprintf("http://%s:%d%s", c.Routes[0].Hostname, c.HTTPPort, uri)
 	response, body := getResponse(t, client, httpURL)
 	if response.StatusCode != 308 || response.Header.Get("Location") != c.httpsURL()+uri {
 		t.Fatalf("redirect: %d %v %s", response.StatusCode, response.Header, body)
@@ -272,7 +273,7 @@ func TestIntegrationLifecycle(t *testing.T) {
 	if err := json.Unmarshal(body, &headers); err != nil {
 		t.Fatal(err)
 	}
-	host := fmt.Sprintf("%s:%d", c.Hostname, c.HTTPSPort)
+	host := fmt.Sprintf("%s:%d", c.Routes[0].Hostname, c.HTTPSPort)
 	for key, want := range map[string]string{"host": host, "proto": "https", "forwarded_host": host, "client": "127.0.0.1", "uri": uri} {
 		if headers[key] != want {
 			t.Fatalf("%s=%q, want %q", key, headers[key], want)
@@ -492,4 +493,182 @@ func cleanupRouter(t *testing.T, bin string, p paths) {
 			t.Errorf("cleanup stop %d: %s", code, output)
 		}
 	})
+}
+
+func TestIntegrationRouteManagement(t *testing.T) {
+	requireIntegration(t)
+	bin := buildCLI(t)
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "stable") }))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "second") }))
+	defer second.Close()
+	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "replacement") }))
+	defer replacement.Close()
+	untrusted := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "untrusted") }))
+	defer untrusted.Close()
+	p, c := initRouter(t, bin, first.Listener.Addr().(*net.TCPAddr).Port)
+	startRouter(t, bin, p)
+	client := routerClient(t, p, "127.0.0.1")
+	stableURL := c.routeURL("netbox.sandbar.localhost")
+	waitForTLS(t, client, stableURL)
+	pid := readTestFile(t, p.file("caddy.pid"))
+	root := readTestFile(t, p.file("caddy/pki/authorities/local/root.crt"))
+	// Check the unchanged route throughout all live updates and failures.
+	ctx, cancel := context.WithCancel(context.Background())
+	errorsSeen := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ctx.Err() == nil {
+			response, err := client.Get(stableURL)
+			if err == nil {
+				var body []byte
+				body, err = io.ReadAll(response.Body)
+				response.Body.Close()
+				if err == nil && (response.StatusCode != 200 || string(body) != "stable") {
+					err = fmt.Errorf("unchanged route: HTTP %d body %q", response.StatusCode, body)
+				}
+			}
+			if err != nil {
+				select {
+				case errorsSeen <- err:
+				default:
+				}
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	command := func(args ...string) {
+		t.Helper()
+		if code, output := runBinary(t, bin, filepath.Dir(p.config), args...); code != 0 {
+			t.Fatalf("%v: %d %s", args, code, output)
+		}
+	}
+	command("add", "second.sandbar.localhost", second.URL)
+	secondURL := c.routeURL("second.sandbar.localhost")
+	waitForTLS(t, client, secondURL)
+	if response, body := getResponse(t, client, secondURL); response.StatusCode != 200 || string(body) != "second" {
+		t.Fatalf("new route: %d %s", response.StatusCode, body)
+	}
+	command("add", "--replace", "second.sandbar.localhost", replacement.URL)
+	if response, body := getResponse(t, client, secondURL); response.StatusCode != 200 || string(body) != "replacement" {
+		t.Fatalf("replacement: %d %s", response.StatusCode, body)
+	}
+	response, _ := getResponse(t, client, fmt.Sprintf("http://second.sandbar.localhost:%d/path?q=1", c.HTTPPort))
+	if response.StatusCode != 308 || response.Header.Get("Location") != secondURL+"/path?q=1" {
+		t.Fatalf("new redirect: %d %v", response.StatusCode, response.Header)
+	}
+	command("add", "tls.sandbar.localhost", untrusted.URL)
+	tlsURL := c.routeURL("tls.sandbar.localhost")
+	waitForTLS(t, client, tlsURL)
+	if response, _ := getResponse(t, client, tlsURL); response.StatusCode != 502 {
+		t.Fatal("HTTPS upstream verification bypassed", response.StatusCode)
+	}
+	command("rm", "second.sandbar.localhost")
+	// Removed hostnames can fail the TLS handshake after their certificate is unloaded.
+	if response, err := client.Get(secondURL); err == nil {
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil || response.StatusCode == 200 || string(body) == "replacement" {
+			t.Fatalf("removed route still serves: %d %s %v", response.StatusCode, body, readErr)
+		}
+	}
+	if response, _ := getResponse(t, client, fmt.Sprintf("http://second.sandbar.localhost:%d/", c.HTTPPort)); response.Header.Get("Location") != "" {
+		t.Fatal("removed route still redirects")
+	}
+	// Force an actual Caddy configuration load failure after validation succeeds.
+	blocker, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	source := readTestFile(t, p.config)
+	generated := readTestFile(t, p.file("Caddyfile"))
+	edited, err := readConfig(p.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited.HTTPPort = blocker.Addr().(*net.TCPAddr).Port
+	editedBytes, err := configBytes(edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.config, editedBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if code, output := runBinary(t, bin, filepath.Dir(p.config), "reload"); code == 0 || !strings.Contains(output, "address already in use") {
+		t.Fatalf("expected failed live load: %d %s", code, output)
+	}
+	if !bytes.Equal(editedBytes, readTestFile(t, p.config)) || !bytes.Equal(generated, readTestFile(t, p.file("Caddyfile"))) {
+		t.Fatal("failed reload lost edited source or committed generated file")
+	}
+	if err := os.WriteFile(p.config, source, 0600); err != nil {
+		t.Fatal(err)
+	}
+	command("reload")
+	if !bytes.Equal(pid, readTestFile(t, p.file("caddy.pid"))) {
+		t.Fatal("live reload changed Caddy PID")
+	}
+	cancel()
+	<-done
+	select {
+	case err := <-errorsSeen:
+		t.Fatal("unchanged route failed during updates:", err)
+	default:
+	}
+	command("rm", "tls.sandbar.localhost")
+	command("rm", "netbox.sandbar.localhost")
+	active, err := readActiveConfig(p)
+	if err != nil {
+		t.Fatal("empty router lost admin", err)
+	}
+	var activeJSON map[string]any
+	if err := json.Unmarshal(active, &activeJSON); err != nil {
+		t.Fatal(err)
+	}
+	apps, ok := activeJSON["apps"].(map[string]any)
+	if !ok || apps["pki"] == nil {
+		t.Fatalf("empty router lost PKI app: %s", active)
+	}
+	if !bytes.Equal(root, readTestFile(t, p.file("caddy/pki/authorities/local/root.crt"))) {
+		t.Fatal("route removal replaced CA")
+	}
+	if !bytes.Equal(pid, readTestFile(t, p.file("caddy.pid"))) {
+		t.Fatal("empty router changed PID")
+	}
+	command("add", "netbox.sandbar.localhost", first.URL)
+	waitForTLS(t, client, stableURL)
+	if response, body := getResponse(t, client, stableURL); response.StatusCode != 200 || string(body) != "stable" {
+		t.Fatal("add after empty failed")
+	}
+	command("stop")
+	// Empty initialization and startup must also retain the admin endpoint and CA.
+	empty := shortHome(t)
+	httpPort, httpsPort := freePorts(t)
+	if code, output := runBinary(t, bin, empty, "init", "--http-port", strconv.Itoa(httpPort), "--https-port", strconv.Itoa(httpsPort)); code != 0 {
+		t.Fatalf("empty init: %d %s", code, output)
+	}
+	emptyPaths := testPaths(t, empty)
+	startRouter(t, bin, emptyPaths)
+	if _, err := readActiveConfig(emptyPaths); err != nil {
+		t.Fatal("empty startup admin unavailable", err)
+	}
+	if _, err := os.Stat(emptyPaths.file("caddy/pki/authorities/local/root.crt")); err != nil {
+		t.Fatal("empty startup CA unavailable", err)
+	}
+	if code, output := runBinary(t, bin, empty, "add", "first.sandbar.localhost", first.URL); code != 0 {
+		t.Fatalf("add after empty startup: %d %s", code, output)
+	}
+	emptyConfig, err := readConfig(emptyPaths.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyClient := routerClient(t, emptyPaths, "127.0.0.1")
+	waitForTLS(t, emptyClient, emptyConfig.routeURL("first.sandbar.localhost"))
 }

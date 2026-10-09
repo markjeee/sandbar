@@ -102,7 +102,11 @@ func renderCaddyfile(c config, p paths, ipv6 bool) (string, error) {
 	if ipv6 {
 		bind += " [::1]"
 	}
-	return fmt.Sprintf(`{
+	if err := c.validate(); err != nil {
+		return "", err
+	}
+	var content strings.Builder
+	fmt.Fprintf(&content, `{
 	admin %s
 	storage file_system %s
 	persist_config off
@@ -122,16 +126,20 @@ func renderCaddyfile(c config, p paths, ipv6 bool) (string, error) {
 	}
 }
 
-https://%s:%d {
+`, strconv.Quote(address), strconv.Quote(p.file("caddy")), c.HTTPPort, c.HTTPSPort, bind)
+	for _, r := range c.Routes {
+		fmt.Fprintf(&content, `https://%s:%d {
 	tls internal
-	reverse_proxy 127.0.0.1:%d
+	reverse_proxy %s
 }
 
 http://%s:%d {
 	redir %s{uri} 308
 }
-`, strconv.Quote(address), strconv.Quote(p.file("caddy")), c.HTTPPort, c.HTTPSPort, bind,
-		c.Hostname, c.HTTPSPort, c.UpstreamPort, c.Hostname, c.HTTPPort, c.httpsURL()), nil
+
+`, r.Hostname, c.HTTPSPort, r.Upstream, r.Hostname, c.HTTPPort, c.routeURL(r.Hostname))
+	}
+	return strings.TrimRight(content.String(), "\n") + "\n", nil
 }
 
 func validateAndReplace(p paths, content string, out, errOut io.Writer) error {
@@ -166,6 +174,9 @@ func checkAdminSocket(p paths) error {
 }
 
 func start(p paths, out, errOut io.Writer) error {
+	if err := recoverTransaction(p, errOut); err != nil {
+		return err
+	}
 	c, err := readConfig(p.config)
 	if err != nil {
 		return err
@@ -207,7 +218,12 @@ func start(p paths, out, errOut io.Writer) error {
 		fmt.Fprintln(errOut, "Caddy log:", log.Name())
 		return err
 	}
-	fmt.Fprintln(out, "HTTPS:", c.httpsURL())
+	for _, r := range c.Routes {
+		fmt.Fprintln(out, "HTTPS:", c.routeURL(r.Hostname))
+	}
+	if len(c.Routes) == 0 {
+		fmt.Fprintln(out, "HTTPS: no routes configured")
+	}
 	fmt.Fprintln(out, "Root certificate:", p.file("caddy/pki/authorities/local/root.crt"))
 	fmt.Fprintln(out, "Caddy log:", log.Name())
 	return nil
