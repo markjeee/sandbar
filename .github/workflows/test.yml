@@ -25,9 +25,16 @@ jobs:
           archive=caddy_2.11.7_linux_amd64.tar.gz
           curl -fsSLO "$release/$archive"
           curl -fsSLO "$release/caddy_2.11.7_checksums.txt"
-          awk -v archive="$archive" '$2 == archive' caddy_2.11.7_checksums.txt > selected-checksum.txt
-          test -s selected-checksum.txt
-          sha256sum -c selected-checksum.txt
+          # Caddy publishes SHA-512 checksums. Require one valid matching entry.
+          awk -v archive="$archive" '
+            $2 == archive {
+              if (NF != 2 || length($1) != 128 || $1 ~ /[^0-9a-fA-F]/) exit 1
+              print $1 "  " $2
+              count++
+            }
+            END { if (count != 1) exit 1 }
+          ' caddy_2.11.7_checksums.txt > selected-checksum.txt
+          sha512sum --check --strict selected-checksum.txt
           mkdir -p "$RUNNER_TEMP/caddy-bin"
           tar -xzf "$archive" -C "$RUNNER_TEMP/caddy-bin" caddy
           echo "$RUNNER_TEMP/caddy-bin" >> "$GITHUB_PATH"
