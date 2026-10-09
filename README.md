@@ -1,26 +1,36 @@
 # Sandbar
 
 Sandbar is a standalone Linux CLI for local HTTPS routes through Caddy.
-It connects one `<name>.sandbar.localhost` hostname to an HTTP backend on `127.0.0.1`.
+It connects `<name>.sandbar.localhost` hostnames to local HTTP or HTTPS backends.
 Sandbar exits after each command. Only Caddy stays running.
 
 ## Build
 
-Use Go 1.27. Sandbar uses only the Go standard library.
+Use Go 1.27.2 or later. Sandbar uses only the Go standard library.
 
 ```sh
 CGO_ENABLED=0 go build -o sandbar .
 ./sandbar --help
 ```
 
+For Linux amd64 installation and beta package details, see [installation](docs/install.md).
+Caddy installation remains separate.
+
 ## Configuration
 
 ```sh
-./sandbar init app.sandbar.localhost 8000
+./sandbar init
+./sandbar add app.sandbar.localhost 8000
 ```
 
+`init` creates an empty version 2 configuration without requiring Caddy.
+The existing `init <hostname> <upstream>` form still creates an initial route.
+Repeating initialization with identical settings succeeds without rewriting the source.
+Different settings return an error and preserve the existing file.
+`add`, `rm`, `reload`, and `start` require installed Caddy.
+
 HTTP port 80 redirects to HTTPS port 443. The HTTPS URL is `https://app.sandbar.localhost`.
-The upstream, HTTP, and HTTPS ports must differ.
+An upstream port must differ from both router ports. Router ports must also differ.
 Flags must precede positional arguments.
 
 ```sh
@@ -38,22 +48,39 @@ Use the same home for every command. Keep its path short enough for a Linux Unix
 Home paths cannot contain control characters, braces, or vertical bars because Caddy treats these as syntax.
 Directories have mode `0700`. Private regular files have mode `0600`.
 
-The source has five fields:
+Version 2 source separates router ports from routes:
 
 ```json
 {
-  "version": 1,
-  "hostname": "app.sandbar.localhost",
-  "upstream_port": 8000,
+  "version": 2,
   "http_port": 80,
-  "https_port": 443
+  "https_port": 443,
+  "routes": [
+    {"hostname": "app.sandbar.localhost", "upstream": "http://127.0.0.1:8000"}
+  ]
 }
 ```
 
-`init` needs no Caddy executable. Repeating identical initialization succeeds without rewriting the source.
-Different settings return an error and preserve the existing file.
-Edit `config.json` while stopped. Unknown fields, invalid hostnames, and invalid ports are rejected.
-Names below `.sandbar.localhost` need no public domain registration.
+An empty `routes` array is valid. Hostnames normalize to lowercase and must remain below `.sandbar.localhost`.
+Duplicate hostnames after normalization are rejected. Names need no public domain registration.
+Unknown fields and invalid ports are rejected.
+Version 1 source remains readable. A successful `add` or `rm` converts it to version 2.
+Conversion first preserves its exact source in `config.v1.backup.json` beside `config.json`.
+An identical version 1 addition also performs this conversion.
+
+Upstreams accept bare ports, host-and-port pairs, and HTTP(S) URLs:
+
+| Input | Normalized upstream |
+| --- | --- |
+| `8000` | `http://127.0.0.1:8000` |
+| `localhost:8000` | `http://localhost:8000` |
+| `[::1]:8000` | `http://[::1]:8000` |
+| `https://127.0.0.1:9443` | `https://127.0.0.1:9443` |
+
+Only `localhost` and loopback IP addresses are allowed. IPv6 addresses must use brackets.
+HTTP(S) URLs can omit their port if the default port does not match either router port.
+Credentials, paths, trailing slashes, queries, and fragments are rejected.
+HTTPS upstreams retain Caddy certificate verification. Custom upstream trust settings remain deferred.
 
 ## Caddy
 
@@ -65,7 +92,7 @@ It does not embed Caddy or install a system service.
 The generated file belongs to Sandbar. It is not a source configuration interface.
 Caddy uses internal TLS, a private Unix admin socket, and private certificate storage.
 HTTP and HTTPS bind only to IPv4 loopback and available IPv6 loopback.
-HTTP/3 is disabled. HTTP serves redirects only for the configured hostname.
+HTTP/3 is disabled. HTTP serves redirects only for configured hostnames.
 
 ```sh
 ./sandbar start
@@ -73,7 +100,7 @@ HTTP/3 is disabled. HTTP serves redirects only for the configured hostname.
 ```
 
 Both commands forward Caddy's result. Startup failures include Caddy diagnostics and the log path.
-Before startup, Sandbar checks the private admin socket once. An active or inaccessible socket prevents startup.
+After any pending recovery, startup checks the private admin socket once. An active or inaccessible socket prevents startup.
 A missing socket or a stale socket that refuses connections allows startup.
 This prevents a second Caddy instance from replacing the first instance’s admin socket.
 The check sends no admin API request. It has a one-second limit and does not retry.
@@ -86,6 +113,65 @@ On Linux, Caddy can require `CAP_NET_BIND_SERVICE`. See [Caddy's low-port guidan
 Sandbar lifecycle commands never change capabilities or elevate privileges.
 Stop DDEV or another competing router before using the same addresses and ports.
 Sandbar does not stop other routers or select alternate ports after a conflict.
+
+## Route changes and recovery
+
+```sh
+./sandbar add api.sandbar.localhost localhost:9000
+./sandbar add --replace app.sandbar.localhost 8001
+./sandbar ls
+./sandbar rm api.sandbar.localhost
+./sandbar reload
+```
+
+`add` succeeds unchanged for identical normalized version 2 settings. Replacement requires `--replace` when the upstream differs.
+`rm` rejects an unknown hostname. `ls` lists hostname, HTTPS URL, and normalized upstream, sorted by hostname.
+Removing the final route keeps Caddy's private admin endpoint and shared CA material.
+Removing a route never runs `untrust`.
+
+`add` and `rm` validate candidates before changing committed files.
+They apply changes immediately when Caddy runs, through `caddy reload` at the selected private admin socket.
+When stopped, they save validated changes without starting Caddy.
+Edit `config.json` directly when needed. Use `reload` to validate and apply those edits to a running router.
+A rejected reload retains the edited source for correction and leaves active routes unchanged.
+Use `start` to apply edited source when the router is stopped.
+
+A per-home lock serializes commands. Route changes flush a private transaction journal before reload or committed file replacement.
+Recovery runs before the next route mutation or startup. It compares committed files with recorded previous and candidate copies.
+After an interrupted reload, recovery inspects active Caddy configuration to complete confirmed candidate state or restore previous state.
+Unknown active state and conflicting manual edits block recovery and preserve recovery files.
+
+Recovery files remain under the selected state's `transaction/` directory until recovery succeeds:
+
+- `journal.json` records the transaction phase and exact configuration bytes.
+- `previous.config.json` and `candidate.config.json` preserve source copies.
+- `previous.Caddyfile` and `candidate.Caddyfile` preserve generated copies when present.
+- `previous.active.json` and `candidate.active.json` preserve adapted Caddy configuration when present.
+
+Errors name the conflicting path and recovery directory. Keep these files while comparing manual edits with both recorded states.
+Correct the reported conflict without discarding needed edits, then retry the route command or `start`.
+`status` reports pending recovery without changing it. `stop` and `untrust` remain available with invalid source or recovery state.
+
+## Status
+
+```sh
+./sandbar status
+```
+
+`status` queries only the selected home's private admin endpoint. It distinguishes running, stopped, and inaccessible states.
+It reports source changes pending in generated output, differences from active configuration, and recovery files.
+Comparing generated and active configuration requires installed Caddy for `caddy adapt`.
+Missing or invalid source, generated output, or root certificates remain errors.
+
+Each configured route receives HTTPS `HEAD /` through IPv4 loopback, with a three-second limit per request.
+The request uses its configured hostname for HTTP and TLS, verifies against this home's root, and bypasses proxy settings.
+It does not use system DNS or follow redirects. Stopped routers report routes as unchecked.
+HTTP codes appear separately from TLS and connection errors. HTTP 5xx responses count as failures.
+Other HTTP responses establish reachability only. They do not establish application health.
+
+The exit code is nonzero for a stopped or inaccessible router, pending or unknown configuration, pending recovery, or failed route checks.
+An empty running router can report success without route checks.
+Status does not prove browser trust, system DNS resolution, or operating-system listeners.
 
 ## Browser trust
 
@@ -196,7 +282,7 @@ This proof changes no system DNS, hosts file, or trust store.
 
 ## Checks
 
-Run the shared check command on Linux with Go 1.27 and a C compiler:
+Run the shared check command on Linux with Go 1.27.2 or later and a C compiler:
 
 ```sh
 scripts/check
@@ -215,7 +301,8 @@ Both commands run these checks:
 - govulncheck v1.8.0 for reachable known Go vulnerabilities, including standard library vulnerabilities.
 - A static Linux build with `CGO_ENABLED=0`.
 
-The script installs the pinned development tools into ignored `.sandbox/tools` using Go's normal module cache.
+The script builds the pinned development tools into ignored `.sandbox/tools` using Go's normal module cache.
+Staticcheck uses an isolated build module with x/tools v0.50.0 to read Go 1.27.2 export data.
 Initial installation needs network access. Vulnerability scanning also needs access to the Go vulnerability database.
 A failed tool installation or scan fails the check. Sandbar itself retains no external Go module dependencies.
 CI runs the same command with `--integration` and saves the coverage report.
@@ -243,7 +330,7 @@ Pure tests can run in parallel when their state is independent.
 Native tests use temporary homes and high ports. They stop only the Caddy instances they create.
 They verify certificate trust, redirects, forwarded headers, private state, loopback listeners, and shutdown.
 IPv6 and non-loopback checks report explicit skips only when the required interface is unavailable.
-The Ubuntu CI job pins Caddy v2.11.7 and Go 1.27.1.
+The Ubuntu CI job pins Caddy v2.11.7 and Go 1.27.2.
 macOS support remains deferred. Chrome acceptance follows the separate [isolated browser proof](docs/browser-proof.md).
 Trust-command tests use fake Caddy. They do not change personal or system trust stores.
 

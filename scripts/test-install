@@ -1,0 +1,145 @@
+#!/bin/sh
+# Run real checkout builds and remote installation through controlled curl fixtures.
+set -eu
+umask 077
+
+project_dir=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
+# Test homes select install destinations, while Go keeps the caller's caches.
+GOMODCACHE=$(go -C "$project_dir" env GOMODCACHE)
+GOCACHE=$(go -C "$project_dir" env GOCACHE)
+export GOMODCACHE GOCACHE
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+trap 'exit 1' HUP INT TERM
+fail() {
+    printf 'Installer test failed: %s\n' "$1" >&2
+    [ ! -f "$test_dir/output.log" ] || cat "$test_dir/output.log" >&2
+    exit 1
+}
+expect_failure() {
+    if "$@" > "$test_dir/output.log" 2>&1; then
+        fail "command unexpectedly succeeded: $*"
+    fi
+}
+assert_preserved() {
+    cmp "$test_dir/previous" "$test_dir/bin/sandbar" || fail 'existing executable changed after failure'
+    [ -x "$test_dir/bin/sandbar" ] || fail 'existing executable lost its executable mode'
+    [ "$("$test_dir/bin/sandbar")" = previous ] || fail 'previous executable stopped working'
+}
+
+mkdir "$test_dir/home" "$test_dir/bin" "$test_dir/fixtures" "$test_dir/tools"
+printf '#!/bin/sh\necho previous\n' > "$test_dir/previous"
+chmod 755 "$test_dir/previous"
+cp "$test_dir/previous" "$test_dir/bin/sandbar"
+
+printf '%s\n' 'Testing real checkout installation from another directory'
+(cd "$test_dir" && HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir "$test_dir/local bin") > "$test_dir/output.log" 2>&1 || fail 'checkout installation'
+[ "$("$test_dir/local bin/sandbar" --version)" = 'sandbar development' ] || fail 'checkout executable version'
+HOME="$test_dir/home" sh "$project_dir/install.sh" > "$test_dir/output.log" 2>&1 || fail 'default checkout installation'
+[ -x "$test_dir/home/.local/bin/sandbar" ] || fail 'checkout default destination'
+
+printf '%s\n' 'Preparing and checking real release assets'
+"$project_dir/scripts/release" "$test_dir/fixtures" > "$test_dir/output.log" 2>&1 || fail 'release build'
+(cd "$test_dir/fixtures" && sha256sum -c SHA256SUMS) > "$test_dir/output.log" 2>&1 || fail 'release checksums'
+[ "$("$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64" --version)" = 'sandbar v0.1.0-beta.1' ] || fail 'release executable version'
+tar -tzf "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz" > "$test_dir/contents"
+printf 'sandbar\nLICENSE\ninstall.sh\nRELEASE_NOTES.md\n' > "$test_dir/expected"
+cmp "$test_dir/contents" "$test_dir/expected" || fail 'release archive layout'
+cmp "$project_dir/install.sh" "$test_dir/fixtures/install.sh" || fail 'release installer differs from checkout'
+go version -m "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64" > "$test_dir/build-info"
+grep 'CGO_ENABLED=0' "$test_dir/build-info" >/dev/null || fail 'release build uses CGO'
+grep 'GOARCH=amd64' "$test_dir/build-info" >/dev/null || fail 'release architecture'
+grep 'GOOS=linux' "$test_dir/build-info" >/dev/null || fail 'release operating system'
+
+cat > "$test_dir/tools/curl" <<'CURL'
+#!/bin/sh
+set -eu
+[ "$#" = 4 ] && [ "$1" = -fsSL ] && [ "$3" = -o ] || exit 90
+printf '%s\n' "$2" >> "$FAKE_CURL_LOG"
+case "${FAKE_DOWNLOAD_FAIL:-none}:$2" in
+    archive:*/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz|manifest:*/SHA256SUMS) exit 22 ;;
+esac
+case "$2" in
+    https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.1/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz)
+        cp "$FAKE_RELEASE_DIR/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz" "$4" ;;
+    https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.1/SHA256SUMS)
+        cp "$FAKE_RELEASE_DIR/SHA256SUMS" "$4" ;;
+    *) exit 91 ;;
+esac
+CURL
+cat > "$test_dir/tools/uname" <<'UNAME'
+#!/bin/sh
+case "$1" in
+    -s) printf '%s\n' "${FAKE_SYSTEM:-Linux}" ;;
+    -m) printf '%s\n' "${FAKE_MACHINE:-x86_64}" ;;
+    *) exit 1 ;;
+esac
+UNAME
+chmod 755 "$test_dir/tools/curl" "$test_dir/tools/uname"
+FAKE_RELEASE_DIR="$test_dir/fixtures"
+FAKE_CURL_LOG="$test_dir/curl.log"
+export FAKE_RELEASE_DIR FAKE_CURL_LOG
+PATH="$test_dir/tools:$PATH"
+export PATH
+remote_install() {
+    cat "$test_dir/fixtures/install.sh" | HOME="$test_dir/remote home" sh -s -- "$@"
+}
+
+printf '%s\n' 'Testing piped versioned release installation and atomic replacement'
+remote_install > "$test_dir/output.log" 2>&1 || fail 'default remote installation'
+[ "$("$test_dir/remote home/.local/bin/sandbar" --version)" = 'sandbar v0.1.0-beta.1' ] || fail 'default remote destination'
+ln "$test_dir/bin/sandbar" "$test_dir/old-inode"
+remote_install --bin-dir "$test_dir/bin" > "$test_dir/output.log" 2>&1 || fail 'remote override installation'
+[ "$("$test_dir/bin/sandbar" --version)" = 'sandbar v0.1.0-beta.1' ] || fail 'remote installed version'
+cmp "$test_dir/previous" "$test_dir/old-inode" || fail 'upgrade modified old executable inode'
+[ "$(wc -l < "$test_dir/curl.log")" -eq 4 ] || fail 'remote download count'
+cp "$test_dir/previous" "$test_dir/bin/sandbar"
+
+printf '%s\n' 'Testing rejected checksums and failed upgrades'
+cp "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz" "$test_dir/good-archive"
+printf 'damaged package\n' >> "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz"
+expect_failure remote_install --bin-dir "$test_dir/bin"
+assert_preserved
+cp "$test_dir/good-archive" "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz"
+for failed_asset in archive manifest; do
+    FAKE_DOWNLOAD_FAIL=$failed_asset
+    export FAKE_DOWNLOAD_FAIL
+    expect_failure remote_install --bin-dir "$test_dir/bin"
+    assert_preserved
+done
+unset FAKE_DOWNLOAD_FAIL
+cp "$test_dir/fixtures/SHA256SUMS" "$test_dir/good-checksums"
+printf 'not the package checksum\n' > "$test_dir/fixtures/SHA256SUMS"
+expect_failure remote_install --bin-dir "$test_dir/bin"
+assert_preserved
+cp "$test_dir/good-checksums" "$test_dir/fixtures/SHA256SUMS"
+
+cat > "$test_dir/tools/go" <<'GO'
+#!/bin/sh
+# Simulate a compiler failure before the destination can be replaced.
+echo 'controlled build failure' >&2
+exit 1
+GO
+chmod 755 "$test_dir/tools/go"
+expect_failure env HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir "$test_dir/bin"
+assert_preserved
+
+printf '%s\n' 'Testing unsupported platforms and argument errors'
+FAKE_SYSTEM=Darwin
+export FAKE_SYSTEM
+expect_failure remote_install --bin-dir "$test_dir/bin"
+assert_preserved
+unset FAKE_SYSTEM
+FAKE_MACHINE=aarch64
+export FAKE_MACHINE
+expect_failure remote_install --bin-dir "$test_dir/bin"
+expect_failure env HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir "$test_dir/bin"
+assert_preserved
+unset FAKE_MACHINE
+expect_failure remote_install --bin-dir
+expect_failure remote_install --unknown
+mkdir "$test_dir/directory-destination" "$test_dir/directory-destination/sandbar"
+expect_failure remote_install --bin-dir "$test_dir/directory-destination"
+[ -d "$test_dir/directory-destination/sandbar" ] || fail 'directory destination changed'
+[ -z "$(find "$test_dir/bin" -name '.sandbar.*' -print)" ] || fail 'temporary executable remains'
+printf '%s\n' 'Installer and release tests passed.'

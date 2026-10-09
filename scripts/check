@@ -24,13 +24,32 @@ if [ -n "$unformatted" ]; then
 fi
 sh -n scripts/dev
 sh -n scripts/check
+sh -n scripts/release
+sh -n scripts/test-install
+sh -n install.sh
+
+printf '%s\n' 'Testing checkout and release installation'
+scripts/test-install
 
 printf '%s\n' 'Checking module consistency and vet'
 go mod tidy -diff
 go vet ./...
 
 printf '%s\n' 'Installing pinned development tools into .sandbox/tools'
-GOBIN="$tool_dir" go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+# The released x/tools reader supports Go 1.27.2 export data.
+staticcheck_build_dir="$tool_dir/staticcheck-build"
+mkdir -p "$staticcheck_build_dir"
+cat > "$staticcheck_build_dir/go.mod" <<'EOF'
+module sandbar-staticcheck-build
+
+go 1.27.2
+
+require (
+    honnef.co/go/tools v0.8.1
+    golang.org/x/tools v0.50.0
+)
+EOF
+go -C "$staticcheck_build_dir" build -mod=mod -o "$tool_dir/staticcheck" honnef.co/go/tools/cmd/staticcheck
 GOBIN="$tool_dir" go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
 printf '%s\n' 'Running Staticcheck'
