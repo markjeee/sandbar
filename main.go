@@ -14,39 +14,9 @@ import (
 
 var version = "development"
 
-const usage = `Sandbar serves local routes through Caddy on Linux.
-
-Usage:
-  sandbar [--home <directory>] init [--http-port <port>] [--https-port <port>] [<hostname> <upstream>]
-  sandbar [--home <directory>] add [--replace] <hostname> <upstream>
-  sandbar [--home <directory>] rm <hostname>
-  sandbar [--home <directory>] ls
-  sandbar [--home <directory>] reload
-  sandbar [--home <directory>] status
-  sandbar [--home <directory>] start
-  sandbar [--home <directory>] stop
-  sandbar [--home <directory>] trust
-  sandbar [--home <directory>] untrust
-  sandbar --version
-
-Flags must precede positional arguments. Hostnames must be below sandbar.localhost.
-HTTP port 80 redirects to HTTPS port 443 by default. Upstream ports must differ from router ports.
-Use --http-port 8080 --https-port 8443 for a proof without low-port permissions.
-
-Home precedence: --home, SANDBAR_HOME, then Linux XDG directories.
-Init preserves existing config.json. Reload validates and applies source edits.
-Add and rm apply live changes when Caddy runs. Upstreams must use loopback.
-Start regenerates the Caddyfile. Do not edit the generated file.
-Start and stop delegate to installed Caddy. Only Caddy stays running.
-Lifecycle commands leave system DNS and certificate trust unchanged.
-Trust and untrust select this home's CA, using the caller's trust stores.
-Caddy can request elevated access. Command success does not verify browser trust.
-See the browser guide for verification, manual import, and complete removal.
-`
-
 func main() {
-	// This CLI has no concurrent file creation outside its own private state.
-	// Caddy inherits this mask, including when it starts its background process.
+	// Private development files and Caddy subprocesses use a restrictive mask.
+	// Installed shared files set their group permissions explicitly.
 	syscall.Umask(0077)
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -68,7 +38,7 @@ func execute(args []string, out, errOut io.Writer) error {
 	flags.SetOutput(errOut)
 	home := flags.String("home", os.Getenv("SANDBAR_HOME"), "private Sandbar home")
 	showVersion := flags.Bool("version", false, "show version")
-	flags.Usage = func() { fmt.Fprint(out, usage) }
+	flags.Usage = func() { fmt.Fprint(out, topLevelHelp()) }
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -83,12 +53,32 @@ func execute(args []string, out, errOut io.Writer) error {
 		return nil
 	}
 	if flags.NArg() == 0 || flags.Arg(0) == "help" {
-		fmt.Fprint(out, usage)
+		fmt.Fprint(out, topLevelHelp())
 		return nil
 	}
 	command, rest := flags.Arg(0), flags.Args()[1:]
-	if command != "init" && command != "start" && command != "stop" && command != "trust" && command != "untrust" && command != "add" && command != "rm" && command != "ls" && command != "reload" && command != "status" {
+	if command != "init" && command != "start" && command != "stop" && command != "trust" && command != "untrust" && command != "add" && command != "rm" && command != "ls" && command != "reload" && command != "status" && command != "setup" {
 		return fmt.Errorf("unknown command %q (use --help)", command)
+	}
+	if commandHelpRequested(rest) {
+		text, _ := helpText(command)
+		fmt.Fprint(out, text)
+		return nil
+	}
+	homeFlag := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "home" {
+			homeFlag = true
+		}
+	})
+	if homeFlag && *home == "" {
+		return errors.New("--home requires a directory")
+	}
+	if command == "setup" {
+		if homeFlag || *home != "" {
+			return errors.New("setup does not accept --home or SANDBAR_HOME")
+		}
+		return setup(rest, out, errOut)
 	}
 	if command != "init" && command != "add" && command != "rm" && len(rest) != 0 {
 		return fmt.Errorf("%s accepts no arguments", command)
@@ -123,7 +113,7 @@ func initialize(paths paths, args []string, out, errOut io.Writer) error {
 	flags.SetOutput(errOut)
 	httpPort := flags.Int("http-port", 80, "HTTP redirect port")
 	httpsPort := flags.Int("https-port", 443, "HTTPS port")
-	flags.Usage = func() { fmt.Fprint(out, usage) }
+	flags.Usage = func() { fmt.Fprint(out, topLevelHelp()) }
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -140,6 +130,9 @@ func initialize(paths paths, args []string, out, errOut io.Writer) error {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
+	if paths.installed != nil && (cfg.HTTPPort != 80 || cfg.HTTPSPort != 443) {
+		return errors.New("installed Sandbar uses ports 80 and 443; use --home for development ports")
+	}
 	return withLock(paths, func() error {
 		if err := recoverTransaction(paths, errOut); err != nil {
 			return err
@@ -155,7 +148,7 @@ func initialize(paths paths, args []string, out, errOut io.Writer) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if err := writeConfig(paths.config, cfg); err != nil {
+		if err := createSelectedConfig(paths, cfg); err != nil {
 			return err
 		}
 		fmt.Fprintln(out, "Configuration:", paths.config)

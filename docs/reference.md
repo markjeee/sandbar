@@ -1,0 +1,120 @@
+# Sandbar user reference
+
+These commands describe the current source version's standard Caddy service integration.
+The published `v0.1.0-beta.1` uses a private user router. See [installation and migration](install.md) before upgrading.
+
+## App names and addresses
+
+App names must be below `.sandbar.localhost`, such as `app.sandbar.localhost`.
+Names normalize to lowercase. Duplicate names after normalization are rejected.
+Sandbar routes accept connections only from this computer through IPv4 and available IPv6 loopback addresses.
+Sandbar does not edit DNS or hosts files. Clients and proxies can handle `.localhost` names differently.
+Your app may need allowed-host and CSRF-origin settings for its new name.
+
+| Input | Stored address |
+| --- | --- |
+| `8000` | `http://127.0.0.1:8000` |
+| `localhost:8000` | `http://localhost:8000` |
+| `[::1]:8000` | `http://[::1]:8000` |
+| `https://127.0.0.1:9443` | `https://127.0.0.1:9443` |
+
+Only `localhost` and loopback IP addresses, which refer to this computer, are allowed.
+IPv6 addresses must use brackets.
+Credentials, paths, trailing slashes, queries, and fragments are rejected.
+Each app port must differ from both router ports.
+HTTP(S) URLs may omit their port when the default differs from both router ports.
+Caddy verifies certificates for HTTPS apps. Custom app trust settings are not supported.
+
+## Route changes
+
+`add` succeeds unchanged for identical normalized version 2 settings. A different address requires `--replace`.
+`rm` rejects unknown names. Removing the final app keeps the installed welcome page and certificates.
+Removing a route never removes certificate trust.
+
+Candidates are checked with Caddy before saving. Changes apply without restarting a running Caddy.
+When stopped, changes are saved without starting Caddy. Use `sandbar start` when ready.
+A rejected `reload` keeps your edited source for correction and leaves active routes unchanged.
+Ordinary commands need no sudo after setup and logging out and back in.
+A new terminal pane is not a new login session and may retain the old groups.
+`stop` affects every Caddy route, including unrelated sites. It does not disable boot startup.
+
+## Read status results
+
+`status` reports service state, boot startup, and access to Caddy's private control socket.
+Development status checks the selected private router.
+It reports pending source edits, differences from active configuration, and pending recovery.
+
+Each configured app check sends HTTPS `HEAD /` through IPv4 loopback, with a three-second limit.
+It uses the configured hostname, verifies against the selected root certificate, and bypasses proxy settings.
+It does not follow redirects. Stopped routers report apps as unchecked.
+HTTP codes appear separately from TLS and connection errors.
+HTTP 5xx means failure. Other HTTP responses show reachability, not application health.
+
+The exit code is nonzero for stopped or inaccessible routers, incomplete boot setup, pending configuration or recovery, or failed checks.
+Invalid configuration and missing required root certificates are errors.
+The built-in welcome page is separate from configured app checks.
+Status does not prove browser trust, system DNS resolution, or operating-system listeners.
+See the [browser guide](browser-trust.md) for explicit trust, manual imports, and removal.
+
+## Configuration
+
+Installed app list: `/etc/sandbar/config.json`. Installed state: `/var/lib/sandbar`.
+Without a home override, commands use the standard service.
+An explicit `--home`, or `SANDBAR_HOME` when the flag is absent, selects a [private development router](development.md#private-development-homes).
+
+Edit the app list, then run `sandbar reload` while running or `sandbar start` while stopped.
+Do not edit generated Caddy files.
+`init` creates an empty version 2 configuration and preserves matching existing settings.
+The `init <hostname> <app-address>` form remains available for a new configuration.
+Installed use requires completed setup. Private development initialization does not require Caddy.
+Options must precede positional arguments.
+
+```json
+{
+  "version": 2,
+  "http_port": 80,
+  "https_port": 443,
+  "routes": [
+    {"hostname": "app.sandbar.localhost", "upstream": "http://127.0.0.1:8000"}
+  ]
+}
+```
+
+Installed source must keep ports 80 and 443. Only private development routers support other ports.
+An empty `routes` list is valid. The built-in welcome site is outside this list and `sandbar ls`.
+Unknown fields and invalid ports are rejected.
+Version 1 remains readable. A successful `add` or `rm` converts it to version 2.
+Conversion first saves the exact source in `config.v1.backup.json` beside `config.json`.
+An identical version 1 addition also performs this conversion.
+
+The standard service keeps `/etc/caddy/Caddyfile` as its main configuration.
+Setup adds marked imports and preserves unrelated supported sites and settings.
+Everyday commands change only Sandbar's owned route file.
+Read [supported Caddy configurations](install.md#supported-caddy-configurations) before combining sites.
+
+## Router state and recovery
+
+One installed lock serializes changes across authorized users. Private homes have separate locks.
+Shared files may belong to their last writer while retaining the `sandbar` group and required access modes.
+Caddy keeps installed CA keys in service storage. The public root is `/var/lib/sandbar/root.crt`.
+Private development routers use separate logs, control sockets, and certificates.
+An active or inaccessible private socket prevents another private start.
+Use `journalctl -u caddy.service` for installed logs.
+
+Sandbar saves previous and candidate files before publication or reload.
+Recovery runs before initialization, route changes, and startup.
+It checks active Caddy configuration to finish a confirmed change or restore the previous state.
+Unknown active state, conflicting edits, or changed installation identity preserve recovery files and block mutations.
+
+Recovery files stay under `transaction/` in the selected state directory until recovery succeeds.
+They include `journal.json`, previous and candidate source and generated files, and adapted configuration copies when available.
+Errors name the conflict and recovery directory.
+Keep these files while comparing your edits with both saved states. They may contain private service configuration.
+Correct the reported conflict without discarding needed edits, then retry the command or `start`.
+`status` reports pending recovery without changing it.
+`stop` and `untrust` remain available with invalid source or recovery state.
+
+Avoid external Caddy edits and commands while a Sandbar change runs.
+Other commands do not take Sandbar's lock. Sandbar detects observable conflicts but cannot coordinate arbitrary administrator actions atomically.
+Changed external inputs require review and explicit setup reconciliation before another route change.
+For one-time setup or migration failures, use the separate [manual recovery guide](install.md#setup-and-migration-recovery).

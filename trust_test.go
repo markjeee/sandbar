@@ -207,7 +207,7 @@ func TestUnavailableRoot(t *testing.T) {
 
 func TestTrustRejectsExtraArguments(t *testing.T) {
 	for _, command := range []string{"trust", "untrust"} {
-		for _, argument := range []string{"extra", "--help", "--ca"} {
+		for _, argument := range []string{"extra", "--ca"} {
 			callsPath := fakeCaddy(t)
 			home := filepath.Join(shortHome(t), "absent")
 			code, _, errOut := cli(t, "--home", home, command, argument)
@@ -288,10 +288,10 @@ func TestTrustCommandsUseLock(t *testing.T) {
 }
 
 func TestTrustHelp(t *testing.T) {
-	_, out, _ := cli(t, "--help")
-	for _, text := range []string{"[--home <directory>] trust", "[--home <directory>] untrust", "caller's trust stores", "elevated access", "does not verify browser trust", "complete removal"} {
-		if !strings.Contains(out, text) {
-			t.Fatal(out)
+	for _, command := range []string{"trust", "untrust"} {
+		code, out, errOut := cli(t, command, "--help")
+		if code != 0 || !strings.Contains(out, "Usage: sandbar "+command) || errOut != "" {
+			t.Fatal(code, out, errOut)
 		}
 	}
 }

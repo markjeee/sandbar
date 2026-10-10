@@ -1,0 +1,201 @@
+#!/bin/sh
+# This fixture changes services and access rules in a disposable Ubuntu VM only.
+set -eu
+umask 077
+
+fail() { printf 'Service acceptance failed: %s\n' "$*" >&2; exit 1; }
+[ "${SANDBAR_SERVICE_ACCEPTANCE:-}" = disposable-ubuntu-24.04 ] || fail 'set SANDBAR_SERVICE_ACCEPTANCE=disposable-ubuntu-24.04 in a disposable VM'
+[ -f /run/sandbar-service-acceptance ] || fail 'missing disposable VM marker /run/sandbar-service-acceptance'
+[ "$(id -u)" = 0 ] || fail 'run as root in the disposable VM'
+. /etc/os-release
+[ "$ID:$VERSION_ID:$(uname -m)" = ubuntu:24.04:x86_64 ] || fail 'requires Ubuntu 24.04 amd64'
+[ -d /run/systemd/system ] || fail 'requires running systemd'
+[ "$#" = 1 ] || [ "$#" = 2 ] || fail 'usage: scripts/check-service /absolute/sandbar [--after-reboot]'
+case "$1" in /*) binary=$1 ;; *) fail 'Sandbar executable path must be absolute' ;; esac
+[ -x "$binary" ] || fail 'Sandbar executable is not executable'
+state=/var/tmp/sandbar-service-acceptance
+member=sbaccept
+outsider=sboutsider
+second_member=sbaccepttwo
+as_member() { runuser -u "$member" -- "$binary" "$@"; }
+as_second_member() { runuser -u "$second_member" -- "$binary" "$@"; }
+expect_denied() {
+    if "$@" > "$state/denied.log" 2>&1; then
+        fail "unexpected permission: $*"
+    fi
+}
+expect_access_denied() {
+    expect_denied "$@"
+    rg -qi 'not allowed|not in the sudoers|password is required|access denied|permission denied|authentication is required|authentication required|not permitted' "$state/denied.log" || fail "denial did not establish an access-policy rejection: $*"
+}
+root_fingerprint() { openssl x509 -in /var/lib/sandbar/root.crt -noout -fingerprint -sha256; }
+probe() {
+    curl --silent --show-error --fail --noproxy '*' --retry 5 --retry-delay 1 --retry-all-errors \
+      --resolve "$1:443:127.0.0.1" --cacert /var/lib/sandbar/root.crt "https://$1/"
+}
+
+if [ "$#" = 2 ]; then
+    [ "$2" = --after-reboot ] || fail 'unknown mode'
+    [ -f "$state/boot-id" ] || fail 'missing pre-reboot acceptance evidence'
+    [ "$(cat /proc/sys/kernel/random/boot_id)" != "$(cat "$state/boot-id")" ] || fail 'boot ID did not change'
+    systemctl is-active --quiet caddy.service || fail 'Caddy did not start after reboot'
+    [ "$(systemctl is-enabled caddy.service)" = enabled ] || fail 'Caddy boot startup is not enabled'
+    root_fingerprint > "$state/root-after-reboot.txt"
+    cmp "$state/root-before.txt" "$state/root-after-reboot.txt" || fail 'root changed after reboot'
+    probe sandbar.localhost > "$state/welcome-after-reboot.html"
+    curl --silent --show-error --fail --noproxy '*' http://127.0.0.1:19090/ | rg -q unrelated-site || fail 'unrelated site missing after reboot'
+    as_member ls > "$state/routes-after-reboot.txt"
+    [ ! -s "$state/routes-after-reboot.txt" ] || fail 'removed apps returned after reboot'
+    as_member status
+    printf '%s\n' 'Post-reboot service acceptance passed. Browser trust needs a separate fresh-browser check.'
+    exit
+fi
+
+[ ! -e /etc/sandbar ] || fail 'fixture requires a fresh VM without /etc/sandbar'
+[ ! -e "$state" ] || fail 'fixture has already run'
+for account in "$member" "$outsider" "$second_member"; do
+    if getent passwd "$account" > /dev/null; then fail "fixture account already exists: $account"; fi
+    useradd --create-home --shell /bin/sh "$account"
+done
+mkdir -m 0755 "$state"
+# Accounts have no sudo-group membership. Polkit and the exact validation grant are the tested access.
+for account in "$member" "$outsider" "$second_member"; do
+    if id -nG "$account" | tr ' ' '\n' | rg -q '^(sudo|admin)$'; then fail 'fixture account has broad administrator access'; fi
+done
+
+cp -p /etc/caddy/Caddyfile "$state/original.Caddyfile"
+cat >> /etc/caddy/Caddyfile <<'CADDY'
+
+http://127.0.0.1:19090 {
+    respond "unrelated-site"
+}
+CADDY
+cat > /etc/systemd/system/sandbar-acceptance-other.service <<'UNIT'
+[Unit]
+Description=Sandbar acceptance authorization target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/true
+UNIT
+systemctl daemon-reload
+systemctl start sandbar-acceptance-other.service
+systemctl start caddy.service
+systemctl reload caddy.service
+curl --silent --show-error --fail --noproxy '*' http://127.0.0.1:19090/ | rg -q unrelated-site || fail 'unrelated fixture site did not start'
+sha256sum /etc/caddy/Caddyfile > "$state/config-before.txt"
+find /usr/share/caddy -type f -exec sha256sum {} + | sort > "$state/package-page-before.txt"
+"$binary" setup --check --user "$member" > "$state/preview.log" 2>&1
+sha256sum /etc/caddy/Caddyfile > "$state/config-after-preview.txt"
+cmp "$state/config-before.txt" "$state/config-after-preview.txt" || fail 'preview changed main config'
+[ ! -e /etc/sandbar ] || fail 'preview created installed source'
+expect_denied "$binary" setup --user "$member"
+sha256sum /etc/caddy/Caddyfile > "$state/config-after-rejection.txt"
+cmp "$state/config-before.txt" "$state/config-after-rejection.txt" || fail 'unapproved replacement changed main config'
+"$binary" setup --user "$member" --replace-default-site > "$state/setup.log" 2>&1
+"$binary" setup --user "$member" --replace-default-site > "$state/setup-repeat.log" 2>&1
+"$binary" setup --user "$second_member" --replace-default-site > "$state/setup-second-user.log" 2>&1
+systemctl is-active --quiet caddy.service || fail 'Caddy is not active after setup'
+[ "$(systemctl is-enabled caddy.service)" = enabled ] || fail 'setup did not enable boot startup'
+find /usr/share/caddy -type f -exec sha256sum {} + | sort > "$state/package-page-after.txt"
+cmp "$state/package-page-before.txt" "$state/package-page-after.txt" || fail 'package page files changed'
+root_fingerprint > "$state/root-before.txt"
+probe sandbar.localhost > "$state/welcome.html"
+rg -q 'sandbar add netbox.sandbar.localhost 8000' "$state/welcome.html" || fail 'welcome page lacks first-app example'
+redirect=$(curl --silent --show-error --noproxy '*' --resolve sandbar.localhost:80:127.0.0.1 \
+  --output /dev/null --write-out '%{http_code} %{redirect_url}' 'http://sandbar.localhost/check?value=1')
+[ "$redirect" = '308 https://sandbar.localhost/check?value=1' ] || fail "wrong welcome redirect: $redirect"
+as_member ls > "$state/routes-initial.txt"
+[ ! -s "$state/routes-initial.txt" ] || fail 'welcome page was added to app list'
+
+# Direct requests prove the policy rather than merely inspecting its text.
+runuser -u "$member" -- systemctl --no-ask-password reload caddy.service
+expect_access_denied runuser -u "$member" -- systemctl --no-ask-password restart caddy.service
+expect_access_denied runuser -u "$member" -- systemctl --no-ask-password stop sandbar-acceptance-other.service
+expect_access_denied runuser -u "$member" -- systemctl --no-ask-password disable sandbar-acceptance-other.service
+expect_access_denied runuser -u "$member" -- systemctl --no-ask-password daemon-reload
+expect_access_denied runuser -u "$outsider" -- systemctl --no-ask-password stop caddy.service
+expect_denied runuser -u "$outsider" -- "$binary" status
+cp /var/lib/sandbar/validation/Caddyfile /tmp/other.Caddyfile
+chmod 0644 /tmp/other.Caddyfile
+expect_access_denied runuser -u "$member" -- sudo -n -u root /usr/bin/caddy validate --config /var/lib/sandbar/validation/Caddyfile --adapter caddyfile
+expect_access_denied runuser -u "$member" -- sudo -n -u caddy /usr/bin/caddy version
+expect_access_denied runuser -u "$member" -- sudo -n -u caddy /usr/bin/caddy validate --config /tmp/other.Caddyfile --adapter caddyfile
+expect_access_denied runuser -u "$member" -- sudo -n -u caddy /usr/bin/caddy validate --config /var/lib/sandbar/validation/Caddyfile --adapter caddyfile --help
+expect_access_denied runuser -u "$member" -- sudo -n -u caddy CADDY_ADMIN=localhost:2019 /usr/bin/caddy validate --config /var/lib/sandbar/validation/Caddyfile --adapter caddyfile
+expect_access_denied runuser -u "$outsider" -- sudo -n -u caddy /usr/bin/caddy validate --config /var/lib/sandbar/validation/Caddyfile --adapter caddyfile
+runuser -u "$member" -- sudo -n -H -u caddy /usr/bin/caddy validate --config /var/lib/sandbar/validation/Caddyfile --adapter caddyfile
+visudo --check --file /etc/sudoers.d/sandbar-caddy-validate
+expect_denied runuser -u "$member" -- test -r /var/lib/caddy/.local/share/caddy/pki/authorities/sandbar/root.key
+for policy in /etc/polkit-1/rules.d/50-sandbar.rules /etc/sudoers.d/sandbar-caddy-validate /etc/systemd/system/caddy.service.d/sandbar.conf /usr/bin/caddy; do
+    expect_denied runuser -u "$member" -- test -w "$policy"
+done
+
+mkdir -m 0755 "$state/backend-one" "$state/backend-two"
+printf 'backend-one\n' > "$state/backend-one/index.html"
+printf 'backend-two\n' > "$state/backend-two/index.html"
+python3 -m http.server 19091 --bind 127.0.0.1 --directory "$state/backend-one" > "$state/backend-one.log" 2>&1 &
+backend_one=$!
+python3 -m http.server 19092 --bind 127.0.0.1 --directory "$state/backend-two" > "$state/backend-two.log" 2>&1 &
+backend_two=$!
+trap 'kill "$backend_one" "$backend_two" 2>/dev/null || true' EXIT HUP INT TERM
+pid_before=$(systemctl show caddy.service --property MainPID --value)
+[ "$pid_before" -gt 0 ] || fail 'missing Caddy PID'
+as_member add one.sandbar.localhost 19091
+as_second_member add two.sandbar.localhost 19092
+probe one.sandbar.localhost | rg -q backend-one || fail 'first live route failed'
+probe two.sandbar.localhost | rg -q backend-two || fail 'second live route failed'
+as_member add --replace one.sandbar.localhost 19092
+probe one.sandbar.localhost | rg -q backend-two || fail 'live replacement failed'
+expect_denied as_member add one.sandbar.localhost 19091
+expect_denied as_member add invalid.example.com 19091
+probe one.sandbar.localhost | rg -q backend-two || fail 'rejected addition changed route'
+probe two.sandbar.localhost | rg -q backend-two || fail 'unchanged route failed'
+curl --silent --show-error --fail --noproxy '*' http://127.0.0.1:19090/ | rg -q unrelated-site || fail 'unrelated site changed'
+[ "$(systemctl show caddy.service --property MainPID --value)" = "$pid_before" ] || fail 'live changes restarted Caddy'
+as_member status
+as_member add concurrent-one.sandbar.localhost 19091 > "$state/concurrent-one.log" 2>&1 &
+first_change=$!
+as_second_member add concurrent-two.sandbar.localhost 19092 > "$state/concurrent-two.log" 2>&1 &
+second_change=$!
+wait "$first_change"
+wait "$second_change"
+probe concurrent-one.sandbar.localhost | rg -q backend-one || fail 'first concurrent route was lost'
+probe concurrent-two.sandbar.localhost | rg -q backend-two || fail 'second concurrent route was lost'
+as_second_member rm concurrent-one.sandbar.localhost
+as_member rm concurrent-two.sandbar.localhost
+
+cp -p /etc/sandbar/config.json "$state/valid.config.json"
+printf '{invalid\n' > /etc/sandbar/config.json
+expect_denied as_member reload
+rg -q invalid /etc/sandbar/config.json || fail 'rejected manual reload overwrote edits'
+probe two.sandbar.localhost | rg -q backend-two || fail 'rejected reload changed active routes'
+cp -p "$state/valid.config.json" /etc/sandbar/config.json
+as_member rm one.sandbar.localhost
+as_second_member rm two.sandbar.localhost
+for shared_file in /etc/sandbar/config.json /var/lib/sandbar/routes/Caddyfile; do
+    [ "$(stat -c %G "$shared_file")" = sandbar ] || fail "shared group lost: $shared_file"
+    [ "$(stat -c %U "$shared_file")" = "$second_member" ] || fail "last-writer ownership not preserved: $shared_file"
+    [ "$(stat -c %a "$shared_file")" = 660 ] || fail "shared file mode changed: $shared_file"
+done
+probe sandbar.localhost > "$state/welcome-after-removal.html"
+root_fingerprint > "$state/root-after.txt"
+cmp "$state/root-before.txt" "$state/root-after.txt" || fail 'route changes replaced CA'
+as_member ls > "$state/routes-final.txt"
+[ ! -s "$state/routes-final.txt" ] || fail 'app list is not empty after removal'
+[ "$(systemctl show caddy.service --property MainPID --value)" = "$pid_before" ] || fail 'route removal restarted Caddy'
+# Permit only service stop/start and retain the accepted configuration through restart.
+as_member stop
+systemctl is-active --quiet caddy.service && fail 'member stop did not stop Caddy'
+as_member start
+probe sandbar.localhost > "$state/welcome-after-restart.html"
+as_member ls > "$state/routes-after-restart.txt"
+[ ! -s "$state/routes-after-restart.txt" ] || fail 'removed routes returned after restart'
+as_member status
+ss -H -ltnp > "$state/listeners.txt"
+if ss -H -ltn '( sport = :80 or sport = :443 )' | awk '{print $4}' | rg -v '^(127\.0\.0\.1|\[::1\]):(80|443)$'; then
+    fail 'Sandbar listener is not local'
+fi
+cat /proc/sys/kernel/random/boot_id > "$state/boot-id"
+printf '%s\n' 'Service acceptance passed. Reboot this disposable VM, recreate its /run marker, and use --after-reboot.'
+printf '%s\n' 'Evidence: /var/tmp/sandbar-service-acceptance. Migration and fresh-browser trust checks remain separate.'

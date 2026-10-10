@@ -48,3 +48,57 @@ jobs:
           path: .sandbox/check/coverage.out
           include-hidden-files: true
           if-no-files-found: ignore
+
+  service:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Install apt Caddy and service prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl policykit-1 sudo ripgrep iproute2
+          release=https://github.com/caddyserver/caddy/releases/download/v2.11.7
+          package=caddy_2.11.7_linux_amd64.deb
+          curl -fsSLO "$release/$package"
+          curl -fsSLO "$release/caddy_2.11.7_checksums.txt"
+          awk -v package="$package" '
+            $2 == package {
+              if (NF != 2 || length($1) != 128 || $1 ~ /[^0-9a-fA-F]/) exit 1
+              print $1 "  " $2
+              count++
+            }
+            END { if (count != 1) exit 1 }
+          ' caddy_2.11.7_checksums.txt > selected-package-checksum.txt
+          sha512sum --check --strict selected-package-checksum.txt
+          sudo apt-get install -y "./$package"
+      - name: Build service acceptance executable
+        run: |
+          mkdir -p .sandbox/service
+          CGO_ENABLED=1 go build -race -o .sandbox/service/sandbar .
+      - name: Check disposable installed service
+        run: |
+          sudo touch /run/sandbar-service-acceptance
+          sudo env SANDBAR_SERVICE_ACCEPTANCE=disposable-ubuntu-24.04 \
+            scripts/check-service "$PWD/.sandbox/service/sandbar"
+      - name: Save service evidence
+        if: always()
+        run: |
+          mkdir -p .sandbox/service/evidence
+          sudo cp -a /var/tmp/sandbar-service-acceptance/. .sandbox/service/evidence/ || true
+          sudo journalctl -u caddy.service --no-pager > .sandbox/service/evidence/caddy-journal.log
+          sudo chown -R "$(id -u):$(id -g)" .sandbox/service/evidence
+      - name: Upload service evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-service-evidence
+          path: .sandbox/service/evidence
+          include-hidden-files: true
+          if-no-files-found: ignore

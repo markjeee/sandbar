@@ -20,8 +20,27 @@ const routeCheckTimeout = 3 * time.Second
 // Status observes committed and active state. It never resolves a transaction.
 func status(p paths, out, errOut io.Writer) error {
 	var failures []error
+	var service serviceState
+	if p.installed != nil {
+		var err error
+		service, err = p.installed.Service.Inspect()
+		fmt.Fprintln(out, "Service:", service.State)
+		fmt.Fprintln(out, "Boot startup:", service.Boot)
+		if err != nil {
+			failures = append(failures, err)
+		}
+		if service.State != "active" {
+			failures = append(failures, fmt.Errorf("the Caddy service is %s", service.State))
+		}
+		if service.Boot != "enabled" {
+			failures = append(failures, errors.New("the Caddy boot startup is disabled or unknown"))
+		}
+	}
 	active, adminErr := readActiveConfig(p)
 	stopped := isRouterStopped(adminErr)
+	if p.installed != nil {
+		stopped = service.State == "inactive" && isRouterStopped(adminErr)
+	}
 	switch {
 	case adminErr == nil:
 		fmt.Fprintln(out, "Router: running")
@@ -60,7 +79,7 @@ func status(p paths, out, errOut io.Writer) error {
 		}
 		return errors.Join(failures...)
 	}
-	root := p.file("caddy/pki/authorities/local/root.crt")
+	root := p.rootCertificate()
 	roots, rootErr := selectedStatusRoots(root)
 	for _, r := range c.Routes {
 		if rootErr != nil {
@@ -111,7 +130,7 @@ func configurationStatus(c config, p paths, active []byte, adminErr error, out, 
 		failures = append(failures, errors.New("source configuration has pending changes"))
 	}
 	if adminErr == nil {
-		adapted, err := adaptCaddyfile(p, p.file("Caddyfile"), errOut)
+		adapted, err := committedAdaptedConfig(p, errOut)
 		if err != nil {
 			fmt.Fprintln(out, "Configuration: unknown (cannot inspect generated configuration)")
 			failures = append(failures, err)

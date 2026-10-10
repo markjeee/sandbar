@@ -61,7 +61,7 @@ func jsonEqual(a, b []byte) bool {
 
 func adaptCaddyfile(p paths, path string, errOut io.Writer) ([]byte, error) {
 	var adapted bytes.Buffer
-	if err := invokeCaddy(caddyEnv(p), nil, &adapted, errOut, "adapt", "--config", path, "--adapter", "caddyfile"); err != nil {
+	if err := invokeSelectedCaddy(p, caddyEnv(p), nil, &adapted, errOut, "adapt", "--config", path, "--adapter", "caddyfile"); err != nil {
 		return nil, err
 	}
 	if !json.Valid(adapted.Bytes()) {

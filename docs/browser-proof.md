@@ -2,7 +2,7 @@
 
 This guide checks real Caddy routing and Chrome trust on Ubuntu 24.04 with native Google Chrome.
 It uses generic backend content, temporary Sandbar homes, high ports, and Chrome DevTools MCP.
-Run it as a normal user from the Sandbar checkout after building `./sandbar`.
+Run it as a normal user with the checkout version installed as `sandbar` in PATH.
 Stop at any unexpected failure. Keep test state until its processes stop.
 
 **Do not run real `sandbar trust`, `sandbar untrust`, or Caddy trust commands during this proof.**
@@ -74,10 +74,10 @@ if [ -z "$proof_certutil" ]; then
 fi
 "$proof_certutil" -N --empty-password -d "sql:$proof_db"
 
-./sandbar --home "$proof_dir/target" init --http-port "$http_port" --https-port "$https_port" app.sandbar.localhost "$backend_port"
-./sandbar --home "$proof_dir/target" start
-./sandbar --home "$proof_dir/control" init --http-port "$control_http_port" --https-port "$control_https_port" app.sandbar.localhost "$backend_port"
-./sandbar --home "$proof_dir/control" start
+sandbar --home "$proof_dir/target" init --http-port "$http_port" --https-port "$https_port" app.sandbar.localhost "$backend_port"
+sandbar --home "$proof_dir/target" start
+sandbar --home "$proof_dir/control" init --http-port "$control_http_port" --https-port "$control_https_port" app.sandbar.localhost "$backend_port"
+sandbar --home "$proof_dir/control" start
 target_root="$proof_dir/target/state/caddy/pki/authorities/local/root.crt"
 control_root="$proof_dir/control/state/caddy/pki/authorities/local/root.crt"
 openssl x509 -in "$target_root" -noout -subject -sha256 -fingerprint
@@ -182,8 +182,8 @@ Then stop only the two test routers and the recorded backend process:
 
 ```sh
 cleanup_proof() {
-  ./sandbar --home "$proof_dir/control" stop || return
-  ./sandbar --home "$proof_dir/target" stop || return
+  sandbar --home "$proof_dir/control" stop || return
+  sandbar --home "$proof_dir/target" stop || return
   kill "$backend_pid" || return
   wait "$backend_pid" 2>/dev/null || true
   rm -rf -- "$proof_dir" || return

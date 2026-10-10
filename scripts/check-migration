@@ -1,0 +1,290 @@
+#!/bin/sh
+# Migration and rollback acceptance changes only an explicitly marked disposable VM.
+set -eu
+umask 077
+fail() { printf 'Migration acceptance failed: %s\n' "$*" >&2; exit 1; }
+[ "${SANDBAR_SERVICE_ACCEPTANCE:-}" = disposable-ubuntu-24.04 ] || fail 'requires explicit disposable Ubuntu environment'
+[ -f /run/sandbar-service-acceptance ] || fail 'missing disposable VM marker'
+[ "$(id -u)" = 0 ] || fail 'requires root in the disposable VM'
+. /etc/os-release
+[ "$ID:$VERSION_ID:$(uname -m)" = ubuntu:24.04:x86_64 ] || fail 'requires Ubuntu 24.04 amd64'
+[ -d /run/systemd/system ] || fail 'requires running systemd'
+[ "$#" = 1 ] || fail 'usage: scripts/check-migration /absolute/sandbar'
+case "$1" in /*) input_binary=$1 ;; *) fail 'executable path must be absolute' ;; esac
+[ -x "$input_binary" ] || fail 'Sandbar executable is not executable'
+[ ! -e /etc/sandbar ] || fail 'requires a fresh VM without installed Sandbar state'
+[ ! -e /var/lib/caddy/.local/share/caddy/pki/authorities/sandbar ] || fail 'requires a fresh service CA namespace'
+account=sbmigrate
+if getent passwd "$account" > /dev/null; then fail 'fixture account already exists'; fi
+state=/var/tmp/sandbar-migration-acceptance
+[ ! -e "$state" ] || fail 'fixture has already run'
+mkdir -m 0700 "$state"
+[ ! -e /var/tmp/sandbar-migration-certificate-check ] || fail 'certificate fixture already exists'
+mkdir -m 0755 /var/tmp/sandbar-migration-certificate-check
+useradd --create-home --shell /bin/sh "$account"
+uid=$(id -u "$account")
+user_home=/home/$account
+legacy_home=$user_home/legacy
+control_home=$user_home/control
+legacy_root=$legacy_home/state/caddy/pki/authorities/local/root.crt
+control_root=$control_home/state/caddy/pki/authorities/local/root.crt
+service_local=/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt
+binary=/usr/local/lib/sandbar-migration-fixture/sandbar
+install -d -m 0755 /usr/local/lib/sandbar-migration-fixture
+install -m 0755 "$input_binary" "$binary"
+as_user() { runuser -u "$account" -- "$@"; }
+user_systemctl() {
+    runuser -u "$account" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user "$@"
+}
+start_legacy_unit() {
+    runuser -u "$account" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+      systemd-run --user --collect --unit=sandbar-router --property=Type=forking \
+      "$binary" --home "$legacy_home" start
+}
+migrate() {
+    "$binary" setup --user "$account" --migrate-config "$legacy_home/config.json" \
+      --migrate-state "$legacy_home/state" "$@"
+}
+expect_failure() {
+    label=$1
+    pattern=$2
+    shift 2
+    if "$@" > "$state/$label.log" 2>&1; then fail "$label unexpectedly succeeded"; fi
+    rg -qi "$pattern" "$state/$label.log" || fail "$label failed for an unexpected reason; inspect $state/$label.log"
+}
+probe_legacy() {
+    curl --silent --show-error --fail --noproxy '*' --retry 5 --retry-delay 1 --retry-all-errors \
+      --resolve legacy.sandbar.localhost:443:127.0.0.1 --cacert "$legacy_root" \
+      https://legacy.sandbar.localhost/ | rg -q migration-backend
+}
+probe_control() {
+    curl --silent --show-error --fail --noproxy '*' --retry 5 --retry-delay 1 --retry-all-errors \
+      --resolve control.sandbar.localhost:19444:127.0.0.1 --cacert "$control_root" \
+      https://control.sandbar.localhost:19444/ | rg -q migration-backend
+}
+probe_service_local() {
+    curl --silent --show-error --fail --noproxy '*' --retry 5 --retry-delay 1 --retry-all-errors \
+      --resolve unrelated.example.test:19944:127.0.0.1 --cacert "$service_local" \
+      https://unrelated.example.test:19944/ | rg -q unrelated-service
+}
+assert_legacy_unchanged() {
+    [ "$(cat "$legacy_home/state/caddy.pid")" = "$legacy_pid" ] || fail 'pre-cutover rejection changed legacy PID'
+    probe_legacy || fail 'pre-cutover rejection changed legacy route'
+    cmp "$state/legacy-root.crt" "$legacy_root" || fail 'legacy root changed'
+}
+assert_control_unchanged() {
+    [ "$(cat "$control_home/state/caddy.pid")" = "$control_pid" ] || fail 'development router PID changed'
+    cmp "$state/control-root.crt" "$control_root" || fail 'development root changed'
+    cmp "$state/service-local-root.crt" "$service_local" || fail 'unrelated service root changed'
+    probe_control || fail 'development router no longer works'
+    probe_service_local || fail 'unrelated service no longer works'
+    user_systemctl is-active --quiet sandbar-migration-other.service || fail 'unrelated user service stopped'
+}
+
+# A real low-port legacy router needs the earlier beta's file capability.
+# This is test provisioning only. Installed Sandbar setup must never add this capability.
+[ -z "$(getcap /usr/bin/caddy)" ] || fail 'fixture expects packaged Caddy without an existing file capability'
+setcap cap_net_bind_service=+ep /usr/bin/caddy
+cp -p /etc/caddy/Caddyfile "$state/package.Caddyfile"
+cat > /etc/caddy/Caddyfile <<'CADDY'
+{
+    skip_install_trust
+    auto_https disable_redirects
+}
+https://unrelated.example.test:19944 {
+    bind 127.0.0.1
+    tls internal
+    respond "unrelated-service"
+}
+CADDY
+chmod 0644 /etc/caddy/Caddyfile
+systemctl restart caddy.service
+probe_service_local || fail 'unrelated service fixture did not start'
+cp "$service_local" "$state/service-local-root.crt"
+cp -p /etc/caddy/Caddyfile "$state/prior.Caddyfile"
+prior_boot=$(systemctl is-enabled caddy.service)
+
+cat > "$user_home/backend.py" <<'PYTHON'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+class Handler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.respond(False)
+    def do_GET(self):
+        self.respond(True)
+    def respond(self, body):
+        self.send_response(500 if Path('/home/sbmigrate/backend-fail').exists() else 200)
+        self.end_headers()
+        if body:
+            self.wfile.write(b'migration-backend\n')
+HTTPServer(('127.0.0.1', 19191), Handler).serve_forever()
+PYTHON
+chown "$account:$account" "$user_home/backend.py"
+cat > /etc/systemd/system/sandbar-migration-backend.service <<'UNIT'
+[Unit]
+Description=Sandbar disposable migration backend
+[Service]
+User=sbmigrate
+ExecStart=/usr/bin/python3 /home/sbmigrate/backend.py
+NoNewPrivileges=yes
+UNIT
+systemctl daemon-reload
+systemctl start sandbar-migration-backend.service
+curl --silent --show-error --fail --noproxy '*' --retry 5 --retry-delay 1 --retry-all-errors \
+  http://127.0.0.1:19191/ | rg -q migration-backend || fail 'backend fixture did not start'
+loginctl enable-linger "$account"
+systemctl start "user@$uid.service"
+runuser -u "$account" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+  systemd-run --user --unit=sandbar-migration-other /usr/bin/sleep infinity
+as_user "$binary" --home "$control_home" init --http-port 19081 --https-port 19444 control.sandbar.localhost 19191
+as_user "$binary" --home "$control_home" start
+control_pid=$(cat "$control_home/state/caddy.pid")
+cp "$control_root" "$state/control-root.crt"
+as_user "$binary" --home "$legacy_home" init legacy.sandbar.localhost 19191
+start_legacy_unit
+legacy_pid=$(cat "$legacy_home/state/caddy.pid")
+cp "$legacy_root" "$state/legacy-root.crt"
+probe_legacy || fail 'legacy route did not start'
+assert_control_unchanged
+migrate --check > "$state/preview.log" 2>&1
+rg -q 'Retire identified temporary user service' "$state/preview.log" || fail 'temporary legacy unit was not identified'
+assert_legacy_unchanged
+[ ! -e /etc/sandbar ] || fail 'migration preview created installed state'
+
+mv "$legacy_home/state/caddy/pki/authorities/local/root.key" "$state/held-root.key"
+expect_failure missing-key 'legacy CA signing material root.key' migrate --check
+mv "$state/held-root.key" "$legacy_home/state/caddy/pki/authorities/local/root.key"
+assert_legacy_unchanged
+mkdir "$legacy_home/state/transaction"
+expect_failure pending-recovery 'legacy recovery is pending' migrate --check
+rmdir "$legacy_home/state/transaction"
+assert_legacy_unchanged
+mkdir /var/lib/caddy/.local/share/caddy/pki/authorities/sandbar
+cp "$service_local" /var/lib/caddy/.local/share/caddy/pki/authorities/sandbar/root.crt
+expect_failure destination-conflict 'installed CA conflicts' migrate --check
+rm /var/lib/caddy/.local/share/caddy/pki/authorities/sandbar/root.crt
+rmdir /var/lib/caddy/.local/share/caddy/pki/authorities/sandbar
+assert_legacy_unchanged
+
+# Adaptation succeeds, but real Caddy validation cannot provision missing certificate files.
+cat >> /etc/caddy/Caddyfile <<'CADDY'
+https://invalid.example.test:19945 {
+    bind 127.0.0.1
+    tls /var/tmp/sandbar-migration-certificate-check/missing.crt /var/tmp/sandbar-migration-certificate-check/missing.key
+    respond "validation must fail"
+}
+CADDY
+expect_failure validation-rejection 'no such file' migrate
+cp -p "$state/prior.Caddyfile" /etc/caddy/Caddyfile
+assert_legacy_unchanged
+assert_control_unchanged
+
+# A real HTTP 500 after cutover must restore the previous router and service configuration.
+touch "$user_home/backend-fail"
+expect_failure route-rollback 'returned HTTP 500' migrate
+rm "$user_home/backend-fail"
+probe_legacy || fail 'route-verification failure did not restore legacy HTTPS'
+cmp "$state/prior.Caddyfile" /etc/caddy/Caddyfile || fail 'route rollback did not restore main config'
+[ "$(systemctl is-enabled caddy.service)" = "$prior_boot" ] || fail 'route rollback changed boot state'
+[ ! -e /etc/sandbar/config.json ] || fail 'route rollback left candidate source committed'
+assert_control_unchanged
+
+# A stopped legacy source is valid. A real competing TCP listener must make startup fail,
+# then rollback must restore the unrelated service without starting the stopped legacy router.
+as_user "$binary" --home "$legacy_home" stop
+python3 - "$state/blocker-ready" <<'PYTHON' &
+import signal, socket, sys
+from pathlib import Path
+listener = socket.socket()
+# Reuse connections in TIME_WAIT after the confirmed legacy shutdown.
+# An active TCP listener still prevents this bind because SO_REUSEPORT is not set.
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(('127.0.0.1', 443))
+listener.listen()
+Path(sys.argv[1]).touch()
+signal.pause()
+PYTHON
+blocker_pid=$!
+trap 'kill "$blocker_pid" 2>/dev/null || true' EXIT HUP INT TERM
+attempt=0
+while [ ! -e "$state/blocker-ready" ]; do
+    kill -0 "$blocker_pid" 2>/dev/null || fail 'startup blocker exited'
+    attempt=$((attempt + 1))
+    [ "$attempt" -le 50 ] || fail 'startup blocker was not ready'
+    sleep 0.1
+done
+startup_since=$(date '+%Y-%m-%d %H:%M:%S')
+expect_failure startup-rollback 'caddy.service|address already in use|failed' migrate
+journalctl -u caddy.service --since "$startup_since" --no-pager > "$state/startup-journal.log"
+rg -q '443.*address already in use' "$state/startup-journal.log" || fail 'startup failure was not the intended occupied listener'
+kill "$blocker_pid"
+wait "$blocker_pid" 2>/dev/null || true
+trap - EXIT HUP INT TERM
+systemctl is-active --quiet caddy.service || fail 'startup rollback did not restore prior service'
+cmp "$state/prior.Caddyfile" /etc/caddy/Caddyfile || fail 'startup rollback changed prior config'
+[ ! -e /etc/sandbar/config.json ] || fail 'startup rollback left candidate source committed'
+if curl --silent --max-time 2 --unix-socket "$legacy_home/state/admin.sock" http://localhost/config/ > /dev/null; then
+    fail 'startup rollback unexpectedly started the previously stopped legacy router'
+fi
+assert_control_unchanged
+
+# Exercise the guide's protected extraction against the actual failed-cutover backup record.
+backup_dir=$(sed -n 's/^Setup backup: //p' "$state/startup-rollback.log" | tail -1)
+[ -n "$backup_dir" ] || fail 'failed setup did not report a backup directory'
+python3 - "$backup_dir/backup.json" /etc/caddy/Caddyfile <<'PYTHON'
+import base64, json, os, sys
+from pathlib import Path
+record = Path(sys.argv[1])
+entry = next(item for item in json.loads(record.read_text())['Files'] if item['path'] == sys.argv[2])
+if entry['data'] is None:
+    raise SystemExit('Missing original Caddyfile in backup')
+target = record.parent / 'restore-file'
+fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'wb') as output:
+    output.write(base64.b64decode(entry['data'], validate=True))
+os.chown(target, entry['UID'], entry['GID'])
+os.chmod(target, entry['mode'])
+PYTHON
+cmp "$state/prior.Caddyfile" "$backup_dir/restore-file" || fail 'documented backup extraction changed bytes'
+cp --preserve=mode,ownership "$backup_dir/restore-file" /etc/caddy/Caddyfile
+cmp "$state/prior.Caddyfile" /etc/caddy/Caddyfile || fail 'documented file restoration changed bytes'
+[ "$(stat -c '%a:%u:%g' "$state/prior.Caddyfile")" = "$(stat -c '%a:%u:%g' /etc/caddy/Caddyfile)" ] || fail 'documented restoration changed permissions'
+restart_command=$(python3 - "$backup_dir/backup.json" <<'PYTHON'
+import json, sys
+from pathlib import Path
+print(json.loads(Path(sys.argv[1]).read_text())['LegacyRestart'])
+PYTHON
+)
+[ -n "$restart_command" ] || fail 'manual legacy restart command is missing'
+# The command comes from this fixture's protected, root-owned setup backup.
+sh -c "$restart_command" > "$state/manual-restart.log" 2>&1
+probe_legacy || fail 'documented legacy restart did not restore routing'
+as_user "$binary" --home "$legacy_home" stop
+
+start_legacy_unit
+legacy_pid=$(cat "$legacy_home/state/caddy.pid")
+probe_legacy || fail 'legacy restart before final migration failed'
+migrate > "$state/success.log" 2>&1
+systemctl is-active --quiet caddy.service || fail 'standard service is not active'
+[ "$(systemctl is-enabled caddy.service)" = enabled ] || fail 'standard service is not enabled'
+cmp "$state/legacy-root.crt" /var/lib/sandbar/root.crt || fail 'migration changed the public root'
+cmp "$legacy_root" /var/lib/caddy/.local/share/caddy/pki/authorities/sandbar/root.crt || fail 'service root differs from legacy root'
+cmp "$legacy_home/config.json" /etc/sandbar/config.json || fail 'migration changed source routes'
+for name in root.key intermediate.crt intermediate.key; do
+    cmp "$legacy_home/state/caddy/pki/authorities/local/$name" \
+      "/var/lib/caddy/.local/share/caddy/pki/authorities/sandbar/$name" || fail "migration changed CA material: $name"
+done
+probe_legacy || fail 'existing root did not verify migrated HTTPS'
+assert_control_unchanged
+if user_systemctl is-active --quiet sandbar-router.service; then fail 'matching temporary user service is still active'; fi
+if curl --silent --max-time 2 --unix-socket "$legacy_home/state/admin.sock" http://localhost/config/ > /dev/null; then
+    fail 'old private admin endpoint remains active'
+fi
+setcap -r /usr/bin/caddy
+as_user "$binary" status
+printf '%s\n' 'Migration, validation rejection, real startup rollback, route rollback, CA preservation, and temporary-unit retirement passed.'
+printf '%s\n' 'Evidence: /var/tmp/sandbar-migration-acceptance. Backend and standard service remain for separate fresh-browser acceptance.'
+printf '%s\n' 'This fixture does not install trust or test an interrupted-migration recovery engine. Discard the disposable VM after inspection.'

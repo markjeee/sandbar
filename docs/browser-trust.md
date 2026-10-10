@@ -1,35 +1,36 @@
 # Browser trust on Ubuntu
 
-Phase 2 targets Ubuntu 24.04 and Google Chrome installed from its native Debian package.
+Browser acceptance targets Ubuntu 24.04 and Google Chrome installed from its native Debian package.
 Use a local HTTP backend and one configured `<name>.sandbar.localhost` route.
 NetBox is an optional application example. Sandbar needs no NetBox-specific settings or code.
 Firefox, Java, macOS, and other browser package formats are outside this acceptance target.
 
 ## Start and request trust
 
-Build Sandbar as described in the [README](../README.md#build).
-Run the backend on `127.0.0.1:8000`, then use the normal ports:
+Complete [service setup](install.md#connect-the-standard-caddy-service) with the current source version first.
+The released `v0.1.0-beta.1` still uses a private router and has no service setup command.
+Run the backend on `127.0.0.1:8000`, then add its app name:
 
 ```sh
-./sandbar init app.sandbar.localhost 8000
-./sandbar start
-./sandbar trust
+sandbar add app.sandbar.localhost 8000
+sandbar trust
 ```
 
 Use the same `--home <directory>` or `SANDBAR_HOME` for every command when selecting another Sandbar home.
 The HTTP URL redirects to `https://app.sandbar.localhost`.
 The backend must be running before browser verification.
 
-`trust` delegates `caddy trust --ca local --address unix/<selected-state>/admin.sock`.
-The selected Caddy instance must be running. Sandbar does not start it or try another admin endpoint.
-`init`, `start`, and `stop` do not change trust stores.
+Installed `trust` uses CA ID `sandbar` at `unix//var/lib/sandbar/admin/admin.sock`.
+Development `trust` uses CA ID `local` at the selected home's private socket.
+The selected Caddy router must be running. Sandbar does not start it or try another endpoint.
+Installation, setup, migration, initialization, route changes, start, and stop do not change trust stores.
 
 Run Sandbar as your normal user. Caddy can request elevated access through its standard privilege mechanism.
 Sandbar forwards standard input, output, diagnostics, and Caddy's exit status.
 Sandbar does not collect passwords, invoke its own privilege helper, or install packages.
 Avoid running the whole CLI with `sudo`, which can change user-store selection and file ownership.
 
-The selected Sandbar home chooses the CA. Trust commands inherit the caller's `HOME` and XDG environment.
+Installed use selects the service's Sandbar CA. An explicit development home selects that home's CA. Trust commands inherit the caller's `HOME` and XDG environment.
 **`--home` does not isolate user or system trust stores.**
 Caddy can also attempt updates to available Firefox and Java stores.
 Its command interface does not provide a store-selection flag.
@@ -39,8 +40,13 @@ Keep private CA keys private. Import only the public `root.crt`.
 ## Identify the exact root
 
 `start`, `trust`, and `untrust` identify the public root certificate path.
+Installed public root: `/var/lib/sandbar/root.crt`.
 With `--home <directory>`, it is `<directory>/state/caddy/pki/authorities/local/root.crt`.
-With default paths, it is `$XDG_STATE_HOME/sandbar/caddy/pki/authorities/local/root.crt`, or `~/.local/state/sandbar/caddy/pki/authorities/local/root.crt`.
+The old beta defaults were `$XDG_STATE_HOME/sandbar/caddy/pki/authorities/local/root.crt`, or `~/.local/state/sandbar/caddy/pki/authorities/local/root.crt`.
+Migration preserves that root's bytes and signing material under the installed `sandbar` authority.
+Compare the old and installed root fingerprints after migration. Existing trust stays valid when the root is identical.
+Migration does not import another root or replace the service's unrelated `local` CA.
+See the [migration guide](install.md#upgrade-from-the-private-router) for cutover and rollback.
 Use that printed path below:
 
 ```sh
@@ -74,11 +80,11 @@ See [Chromium's Linux certificate guide](https://chromium.googlesource.com/chrom
 ## Remove trust
 
 Record the exact certificate fingerprint and each store used during setup, including manual imports.
-Then remove Caddy-managed trust for that selected home:
+Then remove Caddy-managed trust for the selected root.
+Stopping is optional. Installed `sandbar stop` would stop every route Caddy serves:
 
 ```sh
-./sandbar stop
-./sandbar untrust
+sandbar untrust
 ```
 
 `untrust` delegates `caddy untrust --cert <selected-root.crt>`.
@@ -90,7 +96,7 @@ Repeated commands retain Caddy's result. They do not replace the CA or promise a
 
 Remove any separately imported Chrome authority through the same certificate manager used for import.
 Compare the SHA-256 fingerprint before removing it. Preserve other roots with the same display name.
-Review any Firefox or Java stores used during setup, even though their browser or application acceptance is outside Phase 2.
+Review any Firefox or Java stores used during setup, even though their browser or application acceptance is outside the current native acceptance target.
 After removal, start the selected router and backend again, then use a fresh Chrome process to verify certificate rejection.
 A connection failure while Caddy is stopped does not prove that trust was removed.
 Successful `untrust` alone does not prove that Chrome or every other store stopped trusting the root.

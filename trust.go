@@ -7,14 +7,14 @@ import (
 )
 
 func changeTrust(p paths, command string, out, errOut io.Writer) error {
-	root := p.file("caddy/pki/authorities/local/root.crt")
+	root := p.rootCertificate()
 	var args []string
 	if command == "trust" {
 		address, err := p.adminAddress()
 		if err != nil {
 			return err
 		}
-		args = []string{"trust", "--ca", "local", "--address", address}
+		args = []string{"trust", "--ca", p.caID(), "--address", address}
 	} else {
 		if _, err := os.ReadFile(root); err != nil {
 			return fmt.Errorf("read selected root certificate %s: %w", root, err)
@@ -23,12 +23,12 @@ func changeTrust(p paths, command string, out, errOut io.Writer) error {
 	}
 	// The selected home identifies the CA, not the caller's trust stores.
 	env := os.Environ()
-	if err := checkCaddy(env, errOut); err != nil {
+	if err := checkSelectedCaddy(p, env, errOut); err != nil {
 		return err
 	}
 	fmt.Fprintln(errOut, "Public root certificate:", root)
 	fmt.Fprintln(errOut, "Caddy can change user and system trust stores and request elevated access.")
-	if err := invokeCaddy(env, os.Stdin, out, errOut, args...); err != nil {
+	if err := invokeSelectedCaddy(p, env, os.Stdin, out, errOut, args...); err != nil {
 		if command == "trust" {
 			fmt.Fprintln(errOut, "Trust requires the selected Sandbar router to be running.")
 		}

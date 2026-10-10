@@ -189,19 +189,7 @@ func TestPaths(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_STATE_HOME", "")
 	t.Setenv("SANDBAR_HOME", "")
-	p, err := resolvePaths("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.config != filepath.Join(base, ".config/sandbar/config.json") || p.state != filepath.Join(base, ".local/state/sandbar") {
-		t.Fatal(p)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "cfg"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(base, "runtime"))
-	p = testPaths(t, "")
-	if p.config != filepath.Join(base, "cfg/sandbar/config.json") || p.state != filepath.Join(base, "runtime/sandbar") {
-		t.Fatal(p)
-	}
+	var p paths
 	envHome := filepath.Join(base, "env")
 	flagHome := filepath.Join(base, "flag")
 	t.Setenv("SANDBAR_HOME", envHome)

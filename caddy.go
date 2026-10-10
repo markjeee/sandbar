@@ -39,6 +39,9 @@ func invokeCaddy(env []string, in io.Reader, out, errOut io.Writer, args ...stri
 }
 
 func caddyEnv(p paths) []string {
+	if p.installed != nil {
+		return os.Environ()
+	}
 	env := make([]string, 0, len(os.Environ())+5)
 	for _, item := range os.Environ() {
 		key, _, _ := strings.Cut(item, "=")
@@ -59,7 +62,11 @@ func checkCaddy(env []string, errOut io.Writer) error {
 	if err := invokeCaddy(env, nil, &out, errOut, "version"); err != nil {
 		return err
 	}
-	fields := strings.Fields(out.String())
+	return checkCaddyVersion(out.String())
+}
+
+func checkCaddyVersion(value string) error {
+	fields := strings.Fields(value)
 	if len(fields) != 0 {
 		match := caddyVersionPattern.FindStringSubmatch(fields[0])
 		if match != nil {
@@ -70,7 +77,7 @@ func checkCaddy(env []string, errOut io.Writer) error {
 			}
 		}
 	}
-	return fmt.Errorf("requires Caddy v2.11.7 or later v2; got %q", strings.TrimSpace(out.String()))
+	return fmt.Errorf("requires Caddy v2.11.7 or later v2; got %q", strings.TrimSpace(value))
 }
 
 func probeIPv6() error {
@@ -94,6 +101,9 @@ func ipv6Available(probe func() error, errOut io.Writer) (bool, error) {
 }
 
 func renderCaddyfile(c config, p paths, ipv6 bool) (string, error) {
+	if p.installed != nil {
+		return renderInstalledRoutes(c, ipv6)
+	}
 	address, err := p.adminAddress()
 	if err != nil {
 		return "", err
@@ -174,6 +184,9 @@ func checkAdminSocket(p paths) error {
 }
 
 func start(p paths, out, errOut io.Writer) error {
+	if p.installed != nil {
+		return startInstalled(p, out, errOut)
+	}
 	if err := recoverTransaction(p, errOut); err != nil {
 		return err
 	}
@@ -230,6 +243,10 @@ func start(p paths, out, errOut io.Writer) error {
 }
 
 func stop(p paths, out, errOut io.Writer) error {
+	if p.installed != nil {
+		fmt.Fprintln(out, "Stopping Caddy stops all routes served by caddy.service.")
+		return p.installed.Service.Control("stop", out, errOut)
+	}
 	address, err := p.adminAddress()
 	if err != nil {
 		return err

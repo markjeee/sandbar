@@ -89,13 +89,13 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 		if !found {
 			return fmt.Errorf("unknown route %s", hostname)
 		}
-	case "reload":
+	case "reload", "start":
 	default:
 		return fmt.Errorf("unknown route command %s", command)
 	}
 	// Manual reload retains the source version and exact edited bytes.
 	candidateSource := previousSource
-	if command != "reload" {
+	if command != "reload" && command != "start" {
 		c.Version = 2
 		c.Hostname = ""
 		c.UpstreamPort = 0
@@ -107,7 +107,7 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 			return err
 		}
 	}
-	if err := checkCaddy(caddyEnv(p), errOut); err != nil {
+	if err := checkSelectedCaddy(p, caddyEnv(p), errOut); err != nil {
 		return err
 	}
 	ipv6, err := ipv6Available(probeIPv6, errOut)
@@ -118,29 +118,46 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 	if err != nil {
 		return err
 	}
-	candidate, err := os.CreateTemp(p.state, ".Caddyfile-*")
-	if err != nil {
-		return err
+	var adapted []byte
+	if p.installed != nil {
+		adapted, err = installedCandidate(p, []byte(content), c, out, errOut)
+		if err != nil {
+			return err
+		}
+	} else {
+		candidate, err := os.CreateTemp(p.state, ".Caddyfile-*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(candidate.Name())
+		_, writeErr := io.WriteString(candidate, content)
+		if err := errors.Join(writeErr, candidate.Close()); err != nil {
+			return err
+		}
+		if err := invokeCaddy(caddyEnv(p), nil, out, errOut, "validate", "--config", candidate.Name(), "--adapter", "caddyfile"); err != nil {
+			return err
+		}
+		adapted, err = adaptCaddyfile(p, candidate.Name(), errOut)
+		if err != nil {
+			return err
+		}
 	}
-	defer os.Remove(candidate.Name())
-	_, writeErr := io.WriteString(candidate, content)
-	if err := errors.Join(writeErr, candidate.Close()); err != nil {
-		return err
-	}
-	if err := invokeCaddy(caddyEnv(p), nil, out, errOut, "validate", "--config", candidate.Name(), "--adapter", "caddyfile"); err != nil {
-		return err
-	}
-	adapted, err := adaptCaddyfile(p, candidate.Name(), errOut)
-	if err != nil {
-		return err
-	}
-	active, activeErr := readActiveConfig(p)
+	active, activeErr := selectedActiveConfig(p)
 	running := activeErr == nil
 	if activeErr != nil && !isRouterStopped(activeErr) {
 		return fmt.Errorf("inspect private admin endpoint: %w", activeErr)
 	}
 	if command == "reload" && !running {
 		return errors.New("router is stopped; start it to apply source configuration")
+	}
+	if p.installed != nil && running {
+		committed, err := committedAdaptedConfig(p, errOut)
+		if err != nil {
+			return err
+		}
+		if !jsonEqual(committed, active) {
+			return errors.New("active Caddy configuration differs from the accepted service files; review setup before changing routes")
+		}
 	}
 	previousGenerated, err := readOptional(p.file("Caddyfile"))
 	if err != nil {
@@ -149,6 +166,9 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 	tx := transaction{Version: 1, Phase: "prepared", Reload: running, Migration: legacy && command != "reload",
 		PreviousSource: previousSource, CandidateSource: candidateSource, PreviousGenerated: previousGenerated,
 		CandidateGenerated: []byte(content), PreviousActive: active, CandidateActive: adapted}
+	if err := prepareTransaction(p, &tx); err != nil {
+		return err
+	}
 	if err := checkTransactionFiles(p, tx); err != nil {
 		return err
 	}
@@ -169,8 +189,16 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 		if err := checkMigrationBackup(p, tx); err != nil {
 			return err
 		}
-		address, _ := p.adminAddress()
-		reloadErr := invokeCaddy(caddyEnv(p), nil, out, errOut, "reload", "--config", p.file("transaction/candidate.Caddyfile"), "--adapter", "caddyfile", "--address", address)
+		var reloadErr error
+		if p.installed != nil {
+			if err := publishGenerated(p, tx.CandidateGenerated); err != nil {
+				return err
+			}
+			reloadErr = p.installed.Service.Control("reload", out, errOut)
+		} else {
+			address, _ := p.adminAddress()
+			reloadErr = invokeCaddy(caddyEnv(p), nil, out, errOut, "reload", "--config", p.file("transaction/candidate.Caddyfile"), "--adapter", "caddyfile", "--address", address)
+		}
 		if reloadErr != nil {
 			if err := recoverTransaction(p, errOut); err != nil {
 				return errors.Join(reloadErr, err)

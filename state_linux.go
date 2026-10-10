@@ -9,8 +9,9 @@ import (
 )
 
 type paths struct {
-	config string
-	state  string
+	config    string
+	state     string
+	installed *installation
 }
 
 func resolvePaths(home string) (paths, error) {
@@ -18,20 +19,11 @@ func resolvePaths(home string) (paths, error) {
 	if home != "" {
 		configDir, stateDir = home, filepath.Join(home, "state")
 	} else {
-		userHome, err := os.UserHomeDir()
+		i, err := inspectInstallation()
 		if err != nil {
 			return paths{}, err
 		}
-		configDir = os.Getenv("XDG_CONFIG_HOME")
-		if !filepath.IsAbs(configDir) {
-			configDir = filepath.Join(userHome, ".config")
-		}
-		stateDir = os.Getenv("XDG_STATE_HOME")
-		if !filepath.IsAbs(stateDir) {
-			stateDir = filepath.Join(userHome, ".local", "state")
-		}
-		configDir = filepath.Join(configDir, "sandbar")
-		stateDir = filepath.Join(stateDir, "sandbar")
+		return installedPaths(i), nil
 	}
 	configDir, err := filepath.Abs(configDir)
 	if err != nil {
@@ -41,10 +33,31 @@ func resolvePaths(home string) (paths, error) {
 	if err != nil {
 		return paths{}, err
 	}
-	return paths{filepath.Join(configDir, "config.json"), stateDir}, nil
+	return paths{config: filepath.Join(configDir, "config.json"), state: stateDir}, nil
 }
 
-func (p paths) file(name string) string { return filepath.Join(p.state, name) }
+func (p paths) file(name string) string {
+	if p.installed != nil {
+		switch name {
+		case "Caddyfile":
+			return filepath.Join(p.state, "routes/Caddyfile")
+		case "admin.sock":
+			return filepath.Join(p.state, "admin/admin.sock")
+		case "router.lock":
+			return filepath.Join(p.state, "work/router.lock")
+		}
+		if name == "transaction" || strings.HasPrefix(name, "transaction/") || name == "transaction-complete" {
+			return filepath.Join(p.state, "work", name)
+		}
+	}
+	return filepath.Join(p.state, name)
+}
+func (p paths) workDir() string {
+	if p.installed != nil {
+		return p.file("work")
+	}
+	return p.state
+}
 func (p paths) adminAddress() (string, error) {
 	socket := p.file("admin.sock")
 	// Linux sockaddr_un.sun_path has 108 bytes, including the terminator.
@@ -70,12 +83,20 @@ func privateDir(path string) error {
 }
 
 func withLock(p paths, action func() error) error {
-	for _, dir := range []string{filepath.Dir(p.config), p.state} {
-		if err := privateDir(dir); err != nil {
-			return fmt.Errorf("prepare private directory: %w", err)
+	if p.installed == nil {
+		for _, dir := range []string{filepath.Dir(p.config), p.state} {
+			if err := privateDir(dir); err != nil {
+				return fmt.Errorf("prepare private directory: %w", err)
+			}
 		}
+	} else if err := p.requireSetup(); err != nil {
+		return err
 	}
-	file, err := os.OpenFile(p.file("router.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+	mode := os.FileMode(0600)
+	if p.installed != nil {
+		mode = 0660
+	}
+	file, err := os.OpenFile(p.file("router.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, mode)
 	if err != nil {
 		return fmt.Errorf("open router lock: %w", err)
 	}
