@@ -82,18 +82,19 @@ jobs:
         run: |
           mkdir -p .sandbox/service
           CGO_ENABLED=1 go build -race -o .sandbox/service/sandbar .
+          sudo install -o root -g root -m 0755 .sandbox/service/sandbar /usr/local/bin/sandbar-service-acceptance
       - name: Check disposable installed service
         run: |
           sudo touch /run/sandbar-service-acceptance
           sudo env SANDBAR_SERVICE_ACCEPTANCE=disposable-ubuntu-24.04 \
-            scripts/check-service "$PWD/.sandbox/service/sandbar"
+            scripts/check-service /usr/local/bin/sandbar-service-acceptance
       - name: Save service evidence
         if: always()
         run: |
           mkdir -p .sandbox/service/evidence
           sudo cp -a /var/tmp/sandbar-service-acceptance/. .sandbox/service/evidence/ || true
-          sudo journalctl -u caddy.service --no-pager > .sandbox/service/evidence/caddy-journal.log
           sudo chown -R "$(id -u):$(id -g)" .sandbox/service/evidence
+          sudo journalctl -u caddy.service --no-pager > .sandbox/service/evidence/caddy-journal.log
       - name: Upload service evidence
         if: always()
         uses: actions/upload-artifact@v4
