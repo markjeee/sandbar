@@ -10,18 +10,15 @@ Sandbar exits after each command. The standard Caddy service keeps running and s
 Use Linux amd64 with apt-packaged Caddy, systemd, Polkit, and sudo. Ubuntu 24.04 is the tested platform.
 Install [Caddy](https://caddyserver.com/docs/install) v2.11.7 or later separately.
 
-**The setup below requires current source. The published `v0.1.0-beta.1` uses a private router and has no `setup` command.**
-With Go 1.27.2 or later, install from a checkout:
+Install `v0.1.0-beta.2`:
 
 ```sh
-git clone https://github.com/markjeee/sandbar.git
-cd sandbar
-sh ./install.sh
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
 The installer does not install Caddy, start services, change trust, or edit shell profiles.
-See [installation and upgrades](docs/install.md) for the beta download, another destination, or migration from an existing router.
+See [installation and upgrades](docs/install.md) for another destination or migration from the beta.1 private router.
 
 ## Set up Caddy
 
@@ -74,7 +71,8 @@ See the [user reference](docs/reference.md) for app addresses, configuration, st
 
 ## Build and contribute
 
-Build with `CGO_ENABLED=0 go build -o sandbar .`. See the [development guide](docs/development.md) for private routers and checks.
+Use Go 1.27.2 or later. Clone this repository, then run `sh ./install.sh` to build and install its source.
+See the [development guide](docs/development.md) for checkout steps, private routers, builds, and checks.
 Choose your tools and submit changes through a [pull request](https://github.com/markjeee/sandbar/pulls).
 Include relevant tests and run the checks in the development guide.
 Sandbar uses the [MIT license](LICENSE).

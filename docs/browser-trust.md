@@ -7,8 +7,8 @@ Firefox, Java, macOS, and other browser package formats are outside this accepta
 
 ## Start and request trust
 
-Complete [service setup](install.md#connect-the-standard-caddy-service) with the current source version first.
-The released `v0.1.0-beta.1` still uses a private router and has no service setup command.
+Complete [service setup](install.md#connect-the-standard-caddy-service) with beta.2 or later first.
+For an existing beta.1 router, follow the [migration guide](install.md#upgrade-from-the-private-router).
 Run the backend on `127.0.0.1:8000`, then add its app name:
 
 ```sh

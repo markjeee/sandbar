@@ -21,7 +21,7 @@ Use fake operations and alternate paths for shared tests. Do not add speculative
 
 `--home` takes priority over `SANDBAR_HOME`. Both explicitly select development operation.
 Binary location does not select the mode. Private routers leave installed services and routes unchanged.
-Without a home override, the current source version uses the installed service rather than XDG user paths.
+Without a home override, beta.2 and later use the installed service rather than XDG user paths.
 With a home override, files are `<home>/config.json` and `<home>/state`.
 Use the same home for every command:
 
@@ -40,7 +40,15 @@ Development routers do not serve the installed welcome page.
 
 ## Build
 
-To build an executable in the checkout:
+Use Go 1.27.2 or later. Clone the repository and install its source:
+
+```sh
+git clone https://github.com/markjeee/sandbar.git
+cd sandbar
+sh ./install.sh
+```
+
+To build an executable in the checkout without installing:
 
 ```sh
 CGO_ENABLED=0 go build -o sandbar .

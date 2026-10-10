@@ -5,16 +5,12 @@ The installed service integration supports apt-packaged Caddy with systemd, Polk
 Install those prerequisites separately. Sandbar packages need no Go runtime.
 Other packages, service managers, macOS, and Windows are not supported by this integration.
 
-**Service setup is available from current source, not the published `v0.1.0-beta.1`.**
-The public beta retains its private user-router behavior.
-Do not use its executable for the service setup commands below.
-
 ## Release installation
 
-The public `v0.1.0-beta.1` release is available:
+Install `v0.1.0-beta.2`:
 
 ```sh
-curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.1/install.sh | sh
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/install.sh | sh
 ```
 
 The versioned installer downloads the matching archive and checks its SHA-256 checksum before replacing `sandbar`.
@@ -23,7 +19,7 @@ The checksum comes from the same HTTPS release. It checks transfer integrity, no
 The default destination is `~/.local/bin`. Select another directory with `--bin-dir`:
 
 ```sh
-curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.1/install.sh | sh -s -- --bin-dir "$HOME/bin"
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/install.sh | sh -s -- --bin-dir "$HOME/bin"
 ```
 
 Make sure the selected directory is in `PATH`, or use the full executable path.
@@ -179,7 +175,9 @@ For everyday route recovery, follow the [user reference](reference.md#router-sta
 
 ## Upgrade from the private router
 
-Back up the old executable and record its version before installing the checkout build.
+Beta.1 uses a private router. Beta.2 uses the standard Caddy service by default.
+Installing beta.2 does not migrate routes, stop the old router, or change trust.
+Back up the old executable and record its version before installing beta.2.
 Record the old configuration path, state directory, CA fingerprint, and command used to start its router.
 Keep the legacy configuration and signing files protected and available until migration is verified.
 Resolve any existing route transaction recovery with the legacy version before migration.
@@ -299,19 +297,19 @@ From the checkout:
 
 ```sh
 scripts/release
-cd .sandbox/release/v0.1.0-beta.1
+cd .sandbox/release/v0.1.0-beta.2
 sha256sum -c SHA256SUMS
-./sandbar_v0.1.0-beta.1_linux_amd64 --version
+./sandbar_v0.1.0-beta.2_linux_amd64 --version
 ```
 
 `scripts/release [output-directory]` prepares these assets without publishing:
 
-- `sandbar_v0.1.0-beta.1_linux_amd64`, a static executable.
-- `sandbar_v0.1.0-beta.1_linux_amd64.tar.gz`, containing `sandbar`, `LICENSE`, `install.sh`, and `RELEASE_NOTES.md`.
+- `sandbar_v0.1.0-beta.2_linux_amd64`, a static executable.
+- `sandbar_v0.1.0-beta.2_linux_amd64.tar.gz`, containing `sandbar`, `LICENSE`, `install.sh`, and `RELEASE_NOTES.md`.
 - `install.sh`, pinned to this release.
 - `RELEASE_NOTES.md`.
 - `SHA256SUMS`, covering the executable, archive, installer, and release notes.
 
 Run `scripts/test-install` to test checkout builds and controlled release downloads.
-Public `v0.1.0-beta.1` assets remain unchanged. Do not publish checkout service changes under the existing tag.
-A later release needs its own version, notes, approval, and public download verification.
+Existing `v0.1.0-beta.1` tags and assets remain unchanged. Publish new versions under their own tags.
+Verify public downloads and installation after publishing a release.

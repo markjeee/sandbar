@@ -3,7 +3,7 @@
 set -eu
 umask 077
 
-version='v0.1.0-beta.1'
+version='v0.1.0-beta.2'
 project_dir=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
 case "$#" in
     0) output_dir="$project_dir/.sandbox/release/$version" ;;

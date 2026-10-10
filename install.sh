@@ -3,7 +3,7 @@
 set -eu
 umask 077
 
-version='v0.1.0-beta.1'
+version='v0.1.0-beta.2'
 bin_dir=${HOME:?HOME must select your user directory}/.local/bin
 while [ "$#" -gt 0 ]; do
     case "$1" in

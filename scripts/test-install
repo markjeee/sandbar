@@ -41,12 +41,12 @@ HOME="$test_dir/home" sh "$project_dir/install.sh" > "$test_dir/output.log" 2>&1
 printf '%s\n' 'Preparing and checking real release assets'
 "$project_dir/scripts/release" "$test_dir/fixtures" > "$test_dir/output.log" 2>&1 || fail 'release build'
 (cd "$test_dir/fixtures" && sha256sum -c SHA256SUMS) > "$test_dir/output.log" 2>&1 || fail 'release checksums'
-[ "$("$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64" --version)" = 'sandbar v0.1.0-beta.1' ] || fail 'release executable version'
-tar -tzf "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz" > "$test_dir/contents"
+[ "$("$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64" --version)" = 'sandbar v0.1.0-beta.2' ] || fail 'release executable version'
+tar -tzf "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz" > "$test_dir/contents"
 printf 'sandbar\nLICENSE\ninstall.sh\nRELEASE_NOTES.md\n' > "$test_dir/expected"
 cmp "$test_dir/contents" "$test_dir/expected" || fail 'release archive layout'
 cmp "$project_dir/install.sh" "$test_dir/fixtures/install.sh" || fail 'release installer differs from checkout'
-go version -m "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64" > "$test_dir/build-info"
+go version -m "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64" > "$test_dir/build-info"
 grep 'CGO_ENABLED=0' "$test_dir/build-info" >/dev/null || fail 'release build uses CGO'
 grep 'GOARCH=amd64' "$test_dir/build-info" >/dev/null || fail 'release architecture'
 grep 'GOOS=linux' "$test_dir/build-info" >/dev/null || fail 'release operating system'
@@ -57,12 +57,12 @@ set -eu
 [ "$#" = 4 ] && [ "$1" = -fsSL ] && [ "$3" = -o ] || exit 90
 printf '%s\n' "$2" >> "$FAKE_CURL_LOG"
 case "${FAKE_DOWNLOAD_FAIL:-none}:$2" in
-    archive:*/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz|manifest:*/SHA256SUMS) exit 22 ;;
+    archive:*/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz|manifest:*/SHA256SUMS) exit 22 ;;
 esac
 case "$2" in
-    https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.1/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz)
-        cp "$FAKE_RELEASE_DIR/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz" "$4" ;;
-    https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.1/SHA256SUMS)
+    https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz)
+        cp "$FAKE_RELEASE_DIR/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz" "$4" ;;
+    https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/SHA256SUMS)
         cp "$FAKE_RELEASE_DIR/SHA256SUMS" "$4" ;;
     *) exit 91 ;;
 esac
@@ -87,20 +87,20 @@ remote_install() {
 
 printf '%s\n' 'Testing piped versioned release installation and atomic replacement'
 remote_install > "$test_dir/output.log" 2>&1 || fail 'default remote installation'
-[ "$("$test_dir/remote home/.local/bin/sandbar" --version)" = 'sandbar v0.1.0-beta.1' ] || fail 'default remote destination'
+[ "$("$test_dir/remote home/.local/bin/sandbar" --version)" = 'sandbar v0.1.0-beta.2' ] || fail 'default remote destination'
 ln "$test_dir/bin/sandbar" "$test_dir/old-inode"
 remote_install --bin-dir "$test_dir/bin" > "$test_dir/output.log" 2>&1 || fail 'remote override installation'
-[ "$("$test_dir/bin/sandbar" --version)" = 'sandbar v0.1.0-beta.1' ] || fail 'remote installed version'
+[ "$("$test_dir/bin/sandbar" --version)" = 'sandbar v0.1.0-beta.2' ] || fail 'remote installed version'
 cmp "$test_dir/previous" "$test_dir/old-inode" || fail 'upgrade modified old executable inode'
 [ "$(wc -l < "$test_dir/curl.log")" -eq 4 ] || fail 'remote download count'
 cp "$test_dir/previous" "$test_dir/bin/sandbar"
 
 printf '%s\n' 'Testing rejected checksums and failed upgrades'
-cp "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz" "$test_dir/good-archive"
-printf 'damaged package\n' >> "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz"
+cp "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz" "$test_dir/good-archive"
+printf 'damaged package\n' >> "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz"
 expect_failure remote_install --bin-dir "$test_dir/bin"
 assert_preserved
-cp "$test_dir/good-archive" "$test_dir/fixtures/sandbar_v0.1.0-beta.1_linux_amd64.tar.gz"
+cp "$test_dir/good-archive" "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz"
 for failed_asset in archive manifest; do
     FAKE_DOWNLOAD_FAIL=$failed_asset
     export FAKE_DOWNLOAD_FAIL

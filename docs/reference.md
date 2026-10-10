@@ -1,7 +1,7 @@
 # Sandbar user reference
 
-These commands describe the current source version's standard Caddy service integration.
-The published `v0.1.0-beta.1` uses a private user router. See [installation and migration](install.md) before upgrading.
+These commands describe the standard Caddy service integration in beta.2 and later.
+Beta.1 uses a private user router. See [installation and migration](install.md) before upgrading.
 
 ## App names and addresses
 
@@ -80,7 +80,7 @@ Options must precede positional arguments.
 }
 ```
 
-Installed source must keep ports 80 and 443. Only private development routers support other ports.
+Installed routes must keep ports 80 and 443. Only private development routers support other ports.
 An empty `routes` list is valid. The built-in welcome site is outside this list and `sandbar ls`.
 Unknown fields and invalid ports are rejected.
 Version 1 remains readable. A successful `add` or `rm` converts it to version 2.
