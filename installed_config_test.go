@@ -57,7 +57,7 @@ func TestInstalledComposition(t *testing.T) {
 	if err := os.WriteFile(topPath, top, 0600); err != nil {
 		t.Fatal(err)
 	}
-	globals := []byte(renderInstalledGlobals("unix/"+filepath.Join(dir, "admin.sock"), "", ""))
+	globals := []byte(renderInstalledGlobals(config{Version: 2, HTTPPort: 80, HTTPSPort: 443}, "unix/"+filepath.Join(dir, "admin.sock"), "", ""))
 	routes, err := renderInstalledRoutes(config{Version: 2, HTTPPort: 80, HTTPSPort: 443}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestInstalledAdaptedSafety(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := "{\n" + renderInstalledGlobals(admin, "", "") + "}\n" + routes
+	base := "{\n" + renderInstalledGlobals(config{Version: 2, HTTPPort: 80, HTTPSPort: 443}, admin, "", "") + "}\n" + routes
 	adapt := func(text string) []byte {
 		t.Helper()
 		file := filepath.Join(dir, "candidate")
@@ -254,14 +254,6 @@ func TestInstalledRelativeResources(t *testing.T) {
 	}
 }
 
-func TestInstalledPortOverridesRejected(t *testing.T) {
-	for _, c := range []config{{Version: 2, HTTPPort: 8080, HTTPSPort: 443}, {Version: 2, HTTPPort: 80, HTTPSPort: 8443}} {
-		if _, err := renderInstalledRoutes(c, false); err == nil || !strings.Contains(err.Error(), "--home") {
-			t.Fatalf("installed port override accepted: %v", err)
-		}
-	}
-}
-
 func TestInstalledWelcomeAndUnknownHost(t *testing.T) {
 	if _, err := exec.LookPath("caddy"); err != nil {
 		t.Skip("Caddy not installed")
@@ -287,7 +279,7 @@ func TestInstalledWelcomeAndUnknownHost(t *testing.T) {
 	routes = strings.ReplaceAll(routes, ":443", ":"+strconv.Itoa(httpsPort))
 	routes = strings.ReplaceAll(routes, ":80", ":"+strconv.Itoa(httpPort))
 	routes = strings.ReplaceAll(routes, "redir https://sandbar.localhost{uri}", "redir https://sandbar.localhost:"+strconv.Itoa(httpsPort)+"{uri}")
-	global := renderInstalledGlobals(admin, "", "")
+	global := renderInstalledGlobals(config{Version: 2, HTTPPort: 80, HTTPSPort: 443}, admin, "", "")
 	text := "{\n" + global + "http_port " + strconv.Itoa(httpPort) + "\nhttps_port " + strconv.Itoa(httpsPort) + "\nstorage file_system " + strconv.Quote(filepath.Join(dir, "storage")) + "\n}\n" + routes
 	text += "http://other.localhost:" + strconv.Itoa(httpPort) + " {\nbind 127.0.0.1\nrespond unrelated\n}\n"
 	file := filepath.Join(dir, "Caddyfile")
@@ -400,7 +392,7 @@ func TestInstalledCustomCatchallRejected(t *testing.T) {
 	}
 	dir := shortHome(t)
 	admin := "unix/" + filepath.Join(dir, "admin.sock")
-	source := "{\n" + renderInstalledGlobals(admin, "", "") + "}\n" + routes + "http://:80 {\nbind 127.0.0.1\nrespond custom\n}\n"
+	source := "{\n" + renderInstalledGlobals(config{Version: 2, HTTPPort: 80, HTTPSPort: 443}, admin, "", "") + "}\n" + routes + "http://:80 {\nbind 127.0.0.1\nrespond custom\n}\n"
 	path := filepath.Join(dir, "Caddyfile")
 	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
 		t.Fatal(err)

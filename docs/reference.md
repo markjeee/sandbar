@@ -89,7 +89,14 @@ Options must precede positional arguments.
 }
 ```
 
-Installed routes must keep ports 80 and 443. Only private development routers support other ports.
+The JSON above shows fresh installed defaults. Linux installed routes must keep ports 80 and 443.
+macOS setup can select other installed ports with `--http-port` and `--https-port`.
+For example, `sandbar setup --http-port 8080 --https-port 8443` saves those ports for future commands.
+Repeated setup without port options retains saved ports. An omitted option uses its fresh default only when no value exists.
+These settings affect Caddy's shared HTTP/HTTPS ports. Setup rejects conflicting existing explicit settings.
+Use setup to change installed macOS ports, and use `init` port options only with an explicit development home.
+With HTTP 8080 and HTTPS 8443, visit `http://app.sandbar.localhost:8080` or `https://app.sandbar.localhost:8443`.
+App backends must use other ports.
 An empty `routes` list is valid. The built-in welcome site is outside this list and `sandbar ls`.
 Unknown fields and invalid ports are rejected.
 Version 1 remains readable. A successful `add` or `rm` converts it to version 2.

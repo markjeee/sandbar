@@ -181,7 +181,7 @@ Use these three layers alongside the persistent manual development sandbox:
 | Installation acceptance | Installed Sandbar and the actual Homebrew user service | Normal installed paths, when the Developer requests installation |
 
 Setup fixtures cover preview, fresh and repeated setup, conflicts, backups, ordinary rollback, and preserved unrelated configuration.
-They validate ports 80/443 in configuration without binding those ports or registering the real service.
+They validate default and explicitly selected installed ports without binding privileged ports or registering the real service.
 TLS clients use the selected temporary CA directly. They never disable certificate verification or import it into personal stores.
 Passing required native checks establishes readiness for installation. It does not prove installed service operation or browser trust.
 No disposable macOS VM or spare Mac is required for development completion.
@@ -191,14 +191,15 @@ No disposable macOS VM or spare Mac is required for development completion.
 Run this checklist only when installation and its service changes are requested.
 Record each result separately as pending or verified. Do not infer it from mocks or private-router tests.
 
-1. Preview `sandbar setup --check`, review paths and conflicts, then apply the requested `sandbar setup` as the normal user.
-2. Verify the actual Homebrew user service, loopback listeners on ports 80/443, HTTP redirects, and `https://sandbar.localhost`.
-3. Start a generic backend and verify a configured app route with the selected root and normal TLS verification.
-4. Change and remove routes while Caddy runs. Confirm its PID stays unchanged and unrelated sites keep working.
-5. Stop and start through Sandbar. Confirm listener closure, restored routes, unchanged root fingerprint, and renewed login registration.
-6. After explicit `sandbar trust`, follow the [macOS Chrome checklist](browser-trust.md#macos-browser-acceptance) in a fresh browser process.
-7. Verify startup after an actual later login. Registration alone is insufficient. Do not force logout during development.
-8. Run exact-root trust removal only when separately requested, then verify certificate rejection in a fresh Chrome process with Caddy running.
+1. Preview `sandbar setup --check --http-port 8080 --https-port 8443` and review paths and conflicts.
+2. Apply `sandbar setup --http-port 8080 --https-port 8443` as the normal user. Verify the Homebrew service and loopback listeners on 8080/8443.
+3. Check `http://sandbar.localhost:8080` redirects to `https://sandbar.localhost:8443`. Confirm Sandbar has no listeners on 80/443.
+4. Start a generic backend and verify a configured app route with the selected root and normal TLS verification.
+5. Change and remove routes while Caddy runs. Confirm its PID stays unchanged and unrelated sites keep working.
+6. Stop and start through Sandbar. Confirm listener closure, restored routes and ports, unchanged root fingerprint, and renewed login registration. Repeat setup without port options and verify retained ports.
+7. After explicit `sandbar trust`, follow the [macOS Chrome checklist](browser-trust.md#macos-browser-acceptance) in a fresh browser process.
+8. Verify startup after an actual later login. Registration alone is insufficient. Do not force logout during development.
+9. Run exact-root trust removal only when separately requested, then verify certificate rejection in a fresh Chrome process with Caddy running.
 
 Keep real service, browser trust, trust removal, and actual new-login acceptance pending until checked.
 Do not remove the installed CA as automatic test cleanup.

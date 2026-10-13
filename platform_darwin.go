@@ -380,3 +380,7 @@ func waitForDarwinStartup(check func() error, limit time.Duration) error {
 		}
 	}
 }
+
+func validateInstalledPorts(c config) error { return c.validate() }
+
+const customInstalledPorts = true

@@ -134,7 +134,7 @@ func setup(args []string, out, errOut io.Writer) error {
 	if err := checkSetupPolicies(setupPolicies(address)); err != nil {
 		return err
 	}
-	globals := []byte(renderInstalledGlobals(address, "", ""))
+	globals := []byte(renderInstalledGlobals(cfg, address, "", ""))
 	composition, err := composeInstalledConfig(i.Config, top, i.Globals, p.generatedPath(), globals, []byte(routes), options.ReplaceDefault || options.Check)
 	if err != nil {
 		return err

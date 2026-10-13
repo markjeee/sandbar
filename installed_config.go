@@ -21,8 +21,11 @@ const globalMarkerEnd = "# END SANDBAR GLOBAL\n"
 const routesMarkerStart = "# BEGIN SANDBAR ROUTES\n"
 const routesMarkerEnd = "# END SANDBAR ROUTES\n"
 
-func renderInstalledGlobals(adminAddress, rootCert, rootKey string) string {
+func renderInstalledGlobals(c config, adminAddress, rootCert, rootKey string) string {
 	var b strings.Builder
+	if c.HTTPPort != 80 || c.HTTPSPort != 443 {
+		fmt.Fprintf(&b, "http_port %d\nhttps_port %d\n", c.HTTPPort, c.HTTPSPort)
+	}
 	fmt.Fprintf(&b, "admin %s\nskip_install_trust\npki {\n\tca sandbar {\n\t\tname \"sandbar local CA\"\n", strconv.Quote(adminAddress+"|"+installedSocketMode))
 	if rootCert != "" && rootKey != "" {
 		fmt.Fprintf(&b, "\t\troot {\n\t\t\tcert %s\n\t\t\tkey %s\n\t\t}\n", strconv.Quote(rootCert), strconv.Quote(rootKey))
@@ -57,7 +60,7 @@ func renderInstalledRoutes(c config, ipv6 bool) (string, error) {
 	}
 	// An explicit fallback prevents Caddy's automatic redirect fallback from
 	// redirecting names that Sandbar does not serve. Exact custom sites retain priority.
-	fmt.Fprintf(&b, "http://:80 {\n\tbind %s\n\trespond 404\n}\n", bind)
+	fmt.Fprintf(&b, "http://:%d {\n\tbind %s\n\trespond 404\n}\n", c.HTTPPort, bind)
 	return strings.TrimRight(b.String(), "\n") + "\n", nil
 }
 
@@ -502,8 +505,15 @@ func checkInstalledAdapted(data []byte, c config, admin string) error {
 	if len(doc.Storage) > 0 && string(doc.Storage) != "null" {
 		return errors.New("custom Caddy storage requires manual integration")
 	}
-	if (doc.Apps.HTTP.HTTPPort != 0 && doc.Apps.HTTP.HTTPPort != 80) || (doc.Apps.HTTP.HTTPSPort != 0 && doc.Apps.HTTP.HTTPSPort != 443) {
-		return errors.New("the Caddy global HTTP/HTTPS ports conflict with installed Sandbar ports 80/443; review the shared Caddy configuration")
+	httpPort, httpsPort := doc.Apps.HTTP.HTTPPort, doc.Apps.HTTP.HTTPSPort
+	if httpPort == 0 {
+		httpPort = 80
+	}
+	if httpsPort == 0 {
+		httpsPort = 443
+	}
+	if httpPort != c.HTTPPort || httpsPort != c.HTTPSPort {
+		return fmt.Errorf("the Caddy global HTTP/HTTPS ports conflict with installed Sandbar ports %d/%d; review the shared Caddy configuration", c.HTTPPort, c.HTTPSPort)
 	}
 	ca, ok := doc.Apps.PKI.CAs["sandbar"]
 	if !ok || ca.Name != "sandbar local CA" {
@@ -538,7 +548,7 @@ func checkInstalledAdapted(data []byte, c config, admin string) error {
 			if hosts[host] {
 				for _, listen := range server.Listen {
 					_, port, _ := net.SplitHostPort(listen)
-					if port == "443" && (server.AutoHTTPS.Disabled || server.AutoHTTPS.DisableCertificates) {
+					if port == strconv.Itoa(c.HTTPSPort) && (server.AutoHTTPS.Disabled || server.AutoHTTPS.DisableCertificates) {
 						return fmt.Errorf("the Caddy automatic certificate settings prevent Sandbar HTTPS for %s", host)
 					}
 				}
@@ -665,13 +675,6 @@ func checkCaddyInputPaths(path string, tokens []caddyToken) error {
 				return fmt.Errorf("the Caddy input %s uses relative resource path %q; use an absolute path before setup", path, resource)
 			}
 		}
-	}
-	return nil
-}
-
-func validateInstalledPorts(c config) error {
-	if c.HTTPPort != 80 || c.HTTPSPort != 443 {
-		return errors.New("installed Sandbar uses Caddy ports 80 and 443; use --home for development port overrides")
 	}
 	return nil
 }

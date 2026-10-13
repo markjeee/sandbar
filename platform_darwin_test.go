@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -723,5 +724,262 @@ func TestDarwinSetupVerificationFailureRollsBack(t *testing.T) {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("rollback left %s: %v", path, err)
 		}
+	}
+}
+
+func TestDarwinSetupCustomPorts(t *testing.T) {
+	p, service := darwinSetupFixture(t)
+	httpPort, httpsPort := 8080, 8443
+	options := setupOptions{HTTPPort: &httpPort, HTTPSPort: &httpsPort, Check: true}
+	var out, diagnostic bytes.Buffer
+	verify := func(p paths, c config) error {
+		if c.HTTPPort != httpPort || c.HTTPSPort != httpsPort {
+			return fmt.Errorf("wrong setup ports: %d/%d", c.HTTPPort, c.HTTPSPort)
+		}
+		_, err := selectedStatusRoots(p.rootCertificate())
+		return err
+	}
+	if err := setupDarwin(p, options, &out, &diagnostic, verify); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	if !strings.Contains(out.String(), "Ports: HTTP 8080 HTTPS 8443") || !strings.Contains(out.String(), "https://sandbar.localhost:8443") {
+		t.Fatal(out.String())
+	}
+	if _, err := os.Stat(p.config); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("preview created config", err)
+	}
+	options.Check = false
+	if err := setupDarwin(p, options, &out, &diagnostic, verify); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	if err := initialize(p, nil, io.Discard, &diagnostic); err != nil {
+		t.Fatal("init did not retain selected ports", err)
+	}
+	if err := initialize(p, []string{"--http-port", "9080"}, io.Discard, &diagnostic); err == nil || !strings.Contains(err.Error(), "setup") {
+		t.Fatal("init changed installed ports", err)
+	}
+	root := readTestFile(t, p.rootCertificate())
+	service.State = serviceState{State: "inactive", Boot: "disabled"}
+	if err := changeRoutes(p, "add", []string{"kept.sandbar.localhost", "8000"}, io.Discard, &diagnostic); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	if err := setupDarwin(p, setupOptions{}, &out, &diagnostic, verify); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	cfg, err := readConfig(p.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTPPort != 8080 || cfg.HTTPSPort != 8443 || len(cfg.Routes) != 1 || !bytes.Equal(root, readTestFile(t, p.rootCertificate())) {
+		t.Fatal("repeat lost selected ports, route, or CA", cfg)
+	}
+	globals := string(readTestFile(t, p.installed.Globals))
+	routes := string(readTestFile(t, p.generatedPath()))
+	if !strings.Contains(globals, "http_port 8080\nhttps_port 8443\n") || !strings.Contains(routes, "http://:8080 {") || strings.Contains(routes, "http://:80 {") {
+		t.Fatal(globals, routes)
+	}
+	httpsPort = 9443
+	if err := setupDarwin(p, setupOptions{HTTPSPort: &httpsPort}, &out, &diagnostic, verify); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	cfg, err = readConfig(p.config)
+	if err != nil || cfg.HTTPPort != 8080 || cfg.HTTPSPort != 9443 || !bytes.Equal(root, readTestFile(t, p.rootCertificate())) {
+		t.Fatal(cfg, err)
+	}
+}
+
+func TestDarwinSetupInvalidPortsPreserveFiles(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		http, https int
+	}{
+		{"zero", 0, 8443}, {"negative", -1, 8443}, {"range", 8080, 65536}, {"same", 8080, 8080}, {"backend", 8000, 8443},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p, service := darwinSetupFixture(t)
+			cfg := config{Version: 2, HTTPPort: 80, HTTPSPort: 443, Routes: []route{{Hostname: "kept.sandbar.localhost", Upstream: "8000"}}}
+			source, err := configBytes(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(p.config), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.writeFile(p.config, source); err != nil {
+				t.Fatal(err)
+			}
+			top := []byte("# preserve existing configuration\n")
+			if err := os.WriteFile(p.installed.Config, top, 0600); err != nil {
+				t.Fatal(err)
+			}
+			options := setupOptions{HTTPPort: &test.http, HTTPSPort: &test.https}
+			err = setupDarwin(p, options, io.Discard, io.Discard, setupFixtureVerified)
+			if err == nil {
+				t.Fatal("accepted invalid ports")
+			}
+			if len(service.Actions) != 0 || service.validations != 0 || !bytes.Equal(source, readTestFile(t, p.config)) || !bytes.Equal(top, readTestFile(t, p.installed.Config)) {
+				t.Fatal("invalid ports changed files or service")
+			}
+			if _, err := os.Stat(p.state); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("invalid ports created state", err)
+			}
+		})
+	}
+}
+
+func TestDarwinSetupExistingGlobalPorts(t *testing.T) {
+	for _, test := range []struct {
+		name, settings string
+		wantError      bool
+	}{
+		{"matching", "http_port 8080\nhttps_port 8443\n", false},
+		{"conflicting HTTP", "http_port 80\n", true},
+		{"conflicting HTTPS", "https_port 443\n", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p, service := darwinSetupFixture(t)
+			fragment := filepath.Join(filepath.Dir(p.installed.Config), "ports.Caddyfile")
+			if err := os.WriteFile(fragment, []byte(test.settings), 0600); err != nil {
+				t.Fatal(err)
+			}
+			top := []byte("{\nimport " + strconv.Quote(fragment) + "\n}\nhttp://other.localhost:19090 {\nbind 127.0.0.1\nrespond kept\n}\n")
+			if err := os.WriteFile(p.installed.Config, top, 0600); err != nil {
+				t.Fatal(err)
+			}
+			httpPort, httpsPort := 8080, 8443
+			options := setupOptions{HTTPPort: &httpPort, HTTPSPort: &httpsPort, Check: true}
+			var diagnostic bytes.Buffer
+			verify := func(p paths, c config) error { _, err := selectedStatusRoots(p.rootCertificate()); return err }
+			err := setupDarwin(p, options, io.Discard, &diagnostic, verify)
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "conflicts") {
+					t.Fatal(err)
+				}
+				if len(service.Actions) != 0 || !bytes.Equal(top, readTestFile(t, p.installed.Config)) {
+					t.Fatal("conflict changed state")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err, diagnostic.String())
+			}
+			options.Check = false
+			if err := setupDarwin(p, options, io.Discard, &diagnostic, verify); err != nil {
+				t.Fatal(err, diagnostic.String())
+			}
+			if bytes.Contains(readTestFile(t, p.installed.Globals), []byte("http_port")) || bytes.Contains(readTestFile(t, p.installed.Globals), []byte("https_port")) {
+				t.Fatal("duplicated existing global settings")
+			}
+			if string(readTestFile(t, fragment)) != test.settings || !bytes.Contains(readTestFile(t, p.installed.Config), []byte("respond kept")) {
+				t.Fatal("rewrote unrelated configuration")
+			}
+		})
+	}
+}
+
+func TestDarwinCustomPortListeners(t *testing.T) {
+	p, _ := darwinSetupFixture(t)
+	httpPort, httpsPort := freePorts(t)
+	var diagnostic bytes.Buffer
+	verify := func(p paths, c config) error { _, err := selectedStatusRoots(p.rootCertificate()); return err }
+	if err := setupDarwin(p, setupOptions{HTTPPort: &httpPort, HTTPSPort: &httpsPort}, io.Discard, &diagnostic, verify); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	c, err := readConfig(p.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapted, err := adaptCaddyfile(p, p.installed.Config, &diagnostic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Apps struct {
+			HTTP struct {
+				Servers map[string]struct {
+					Listen []string `json:"listen"`
+				} `json:"servers"`
+			} `json:"http"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal(adapted, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range document.Apps.HTTP.Servers {
+		for _, address := range server.Listen {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if port == "80" || port == "443" {
+				t.Fatal("adapted privileged listener", address)
+			}
+		}
+	}
+	var logs bytes.Buffer
+	command := exec.Command(p.installed.Binary, "run", "--config", p.installed.Config, "--adapter", "caddyfile")
+	command.Env = installedCaddyEnv(p.installed)
+	command.Stdout = &logs
+	command.Stderr = &logs
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := command.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			t.Error(err)
+		}
+		if err := command.Wait(); err != nil {
+			t.Errorf("test Caddy: %v\n%s", err, logs.String())
+		}
+	})
+	if err := waitForInstalledStartup(p, c); err != nil {
+		t.Fatal(err)
+	}
+	pid := strconv.Itoa(command.Process.Pid)
+	for _, protocol := range []string{"TCP", "UDP"} {
+		args := []string{"-nP", "-a", "-p", pid, "-i" + protocol, "-Fn"}
+		if protocol == "TCP" {
+			args = append(args, "-sTCP:LISTEN")
+		}
+		output, err := exec.Command("/usr/sbin/lsof", args...).Output()
+		if err != nil {
+			if status, ok := err.(*exec.ExitError); protocol != "UDP" || !ok || status.ExitCode() != 1 {
+				t.Fatal(err)
+			}
+		}
+		seen := map[string]bool{}
+		for _, line := range strings.Split(string(output), "\n") {
+			if !strings.HasPrefix(line, "n") {
+				continue
+			}
+			host, port, err := net.SplitHostPort(strings.TrimPrefix(line, "n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ip := net.ParseIP(host)
+			if ip == nil || !ip.IsLoopback() || (port != strconv.Itoa(httpPort) && port != strconv.Itoa(httpsPort)) {
+				t.Fatal("implicit or non-loopback Caddy listener", line)
+			}
+			seen[port] = true
+			t.Log(protocol, line)
+		}
+		if protocol == "TCP" && (!seen[strconv.Itoa(httpPort)] || !seen[strconv.Itoa(httpsPort)]) {
+			t.Fatal("missing selected listeners", seen)
+		}
+	}
+
+	// The unknown-host fallback uses the selected HTTP port.
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(httpPort)))
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Get("http://unknown.localhost/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 404 || response.Header.Get("Location") != "" {
+		t.Fatal("unexpected fallback", response.StatusCode, response.Header)
 	}
 }

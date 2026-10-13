@@ -9,10 +9,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
-type setupOptions struct{ Check, ReplaceDefault bool }
+type setupOptions struct {
+	Check, ReplaceDefault bool
+	HTTPPort, HTTPSPort   *int
+}
 
 func setup(args []string, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet("setup", flag.ContinueOnError)
@@ -20,12 +25,22 @@ func setup(args []string, out, errOut io.Writer) error {
 	var options setupOptions
 	flags.BoolVar(&options.Check, "check", false, "preview setup")
 	flags.BoolVar(&options.ReplaceDefault, "replace-default-site", false, "replace Caddy's stock welcome site")
+	httpPort := flags.Int("http-port", 80, "HTTP redirect port")
+	httpsPort := flags.Int("https-port", 443, "HTTPS port")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("setup accepts flags only; use sandbar setup --help")
 	}
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "http-port":
+			options.HTTPPort = httpPort
+		case "https-port":
+			options.HTTPSPort = httpsPort
+		}
+	})
 	i, err := inspectInstallation()
 	if err != nil {
 		return err
@@ -53,7 +68,17 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 		if err != nil {
 			return err
 		}
-	} else {
+	}
+	if options.HTTPPort != nil {
+		cfg.HTTPPort = *options.HTTPPort
+	}
+	if options.HTTPSPort != nil {
+		cfg.HTTPSPort = *options.HTTPSPort
+	}
+	if err := cfg.validate(); err != nil {
+		return err
+	}
+	if source == nil || options.HTTPPort != nil || options.HTTPSPort != nil {
 		source, err = configBytes(cfg)
 		if err != nil {
 			return err
@@ -82,7 +107,10 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 	if err != nil {
 		return err
 	}
-	globals := []byte(renderInstalledGlobals(address, "", ""))
+	globals, err := renderDarwinGlobals(p, cfg, top, address)
+	if err != nil {
+		return err
+	}
 	composition, err := composeInstalledConfig(i.Config, top, i.Globals, p.generatedPath(), globals, []byte(routes), options.ReplaceDefault || options.Check)
 	if err != nil {
 		return err
@@ -98,6 +126,7 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 	if top == nil {
 		fmt.Fprintln(out, "Create missing Caddyfile:", i.Config)
 	}
+	fmt.Fprintln(out, "Ports: HTTP", cfg.HTTPPort, "HTTPS", cfg.HTTPSPort)
 	fmt.Fprintln(out, "Routes:", p.generatedPath())
 	fmt.Fprintln(out, "Admin socket:", p.file("admin.sock"))
 	fmt.Fprintln(out, "Login startup:", prior.Boot, "→ register and start the Homebrew user service")
@@ -259,4 +288,43 @@ func verifyDarwinSetupRoutes(p paths, c config) error {
 		return err
 	}
 	return verifySetupSites(p, c, c.Routes)
+}
+
+// Existing matching global port settings remain outside Sandbar's owned fragment.
+func renderDarwinGlobals(p paths, c config, top []byte, address string) ([]byte, error) {
+	globals := renderInstalledGlobals(c, address, "", "")
+	clean, err := stripOwnedMarker(top, globalMarkerStart, globalMarkerEnd)
+	if err != nil {
+		return nil, err
+	}
+	clean, err = stripOwnedMarker(clean, routesMarkerStart, routesMarkerEnd)
+	if err != nil {
+		return nil, err
+	}
+	expanded, _, err := composeCandidate(p.installed.Config, clean, map[string][]byte{filepath.Clean(p.installed.Config): clean}, p.generatedPath())
+	if err != nil {
+		return nil, err
+	}
+	tokens, err := scanCaddyfile(expanded)
+	if err != nil {
+		return nil, err
+	}
+	for n, token := range tokens {
+		if token.depth != 1 || (token.text != "http_port" && token.text != "https_port") {
+			continue
+		}
+		selected := c.HTTPPort
+		if token.text == "https_port" {
+			selected = c.HTTPSPort
+		}
+		if n+1 >= len(tokens) || tokens[n+1].line != token.line {
+			return nil, fmt.Errorf("the existing Caddy %s is invalid", token.text)
+		}
+		value, err := strconv.Atoi(tokens[n+1].text)
+		if err != nil || value != selected {
+			return nil, fmt.Errorf("the existing Caddy %s conflicts with selected port %d; review the shared Caddy configuration", token.text, selected)
+		}
+		globals = strings.Replace(globals, fmt.Sprintf("%s %d\n", token.text, selected), "", 1)
+	}
+	return []byte(globals), nil
 }

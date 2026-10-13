@@ -70,3 +70,11 @@ func TestSetupArgumentsFailBeforeSystemInspection(t *testing.T) {
 		}
 	}
 }
+
+func TestInstalledPortOverridesRejected(t *testing.T) {
+	for _, c := range []config{{Version: 2, HTTPPort: 8080, HTTPSPort: 443}, {Version: 2, HTTPPort: 80, HTTPSPort: 8443}} {
+		if _, err := renderInstalledRoutes(c, false); err == nil || !strings.Contains(err.Error(), "--home") {
+			t.Fatalf("installed port override accepted: %v", err)
+		}
+	}
+}

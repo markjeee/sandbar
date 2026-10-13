@@ -83,16 +83,22 @@ Usage: sandbar setup [options]
 
 Options:
   --check                  Preview changes without applying them
+  --http-port <port>       Installed HTTP redirect port
+  --https-port <port>      Installed HTTPS port
   --replace-default-site   Back up and replace Caddy's recognized stock welcome site
 
 Example:
-  sandbar setup --check
-  sandbar setup
+  sandbar setup --check --http-port 8080 --https-port 8443
+  sandbar setup --http-port 8080 --https-port 8443
 
 Run as your normal user. Install Homebrew Caddy separately before setup.
 Setup preserves supported unrelated sites and creates a missing Homebrew Caddyfile.
 Setup starts Caddy and registers login startup. It does not install certificate trust.
-Installed use requires ports 80 and 443. Run sandbar trust explicitly afterward.
+Fresh defaults remain HTTP 80 and HTTPS 443. Omitted options retain saved ports.
+Use high ports when the user service cannot bind privileged ports.
+Setup saves selected ports for later start, reload, and repeated setup.
+Port settings affect shared Caddy settings. Conflicting explicit settings are rejected.
+Run sandbar trust explicitly afterward.
 Custom sites remain protected. Review conflicts before changing them.
 Do not use --home or SANDBAR_HOME with setup. See docs/install.md for details.
 `),
@@ -109,7 +115,8 @@ First development app: sandbar --home /tmp/sandbar-demo init app.sandbar.localho
 Development: sandbar --home /tmp/sandbar-demo init --http-port 8080 --https-port 8443
 
 Options must come before the hostname. Existing settings are kept.
-Run setup first for installed use. Installed Caddy always uses ports 80 and 443.
+Run setup first for installed use.
+` + platformHelp("Installed Caddy always uses ports 80 and 443.", "Fresh installed defaults are HTTP 80 and HTTPS 443. Select other ports through macOS setup.") + `
 Use --home for a separate development router with other ports.
 `,
 	"add": `Give an app on this computer an HTTPS name.
@@ -167,7 +174,7 @@ This does not prove browser trust or name resolution. See docs/browser-trust.md.
 Usage: sandbar start
 Example: sandbar start
 
-` + platformHelp("Installed use starts caddy.service. Setup enables it at boot.", "Installed use starts Homebrew Caddy and registers login startup.") + `
+` + platformHelp("Installed use starts caddy.service. Setup enables it at boot.", "Installed use starts Homebrew Caddy on saved ports and registers login startup.") + `
 Use --home or SANDBAR_HOME to select a separate development router.
 This command does not add certificate trust.
 ` + platformHelp("Installed logs: journalctl -u caddy.service", "Installed logs: <Homebrew prefix>/var/log/caddy.log (the command reports the path)") + `

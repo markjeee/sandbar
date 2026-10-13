@@ -208,3 +208,12 @@ func systemOutput(binary string, args ...string) ([]byte, error) {
 }
 
 func waitForInstalledStartup(p paths, c config) error { return nil }
+
+func validateInstalledPorts(c config) error {
+	if c.HTTPPort != 80 || c.HTTPSPort != 443 {
+		return errors.New("installed Sandbar uses Caddy ports 80 and 443; use --home for development port overrides")
+	}
+	return nil
+}
+
+const customInstalledPorts = false

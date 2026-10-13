@@ -49,6 +49,7 @@ func TestHelpRequestStopsAtArgumentSeparator(t *testing.T) {
 func TestHelpMatchesNativePlatform(t *testing.T) {
 	commands := map[string][]string{
 		"setup":  {"--user", "--migrate-config", "systemd"},
+		"init":   {"Installed Caddy always uses ports 80 and 443."},
 		"reload": {"/etc/sandbar/config.json"},
 		"status": {"boot startup"},
 		"start":  {"caddy.service", "journalctl"},
@@ -57,10 +58,11 @@ func TestHelpMatchesNativePlatform(t *testing.T) {
 	}
 	if runtime.GOOS == "darwin" {
 		commands = map[string][]string{
-			"setup":  {"current user's Homebrew Caddy service", "sandbar setup --check", "registers login startup"},
+			"setup":  {"current user's Homebrew Caddy service", "sandbar setup --check --http-port 8080 --https-port 8443", "sandbar setup --http-port 8080 --https-port 8443", "Fresh defaults remain HTTP 80 and HTTPS 443", "Omitted options retain saved ports", "Conflicting explicit settings are rejected", "registers login startup"},
+			"init":   {"Fresh installed defaults are HTTP 80 and HTTPS 443", "Select other ports through macOS setup"},
 			"reload": {"~/Library/Application Support/sandbar/config.json"},
 			"status": {"login startup"},
-			"start":  {"registers login startup", "<Homebrew prefix>/var/log/caddy.log"},
+			"start":  {"on saved ports", "registers login startup", "<Homebrew prefix>/var/log/caddy.log"},
 			"stop":   {"unregisters login startup"},
 			"trust":  {"~/Library/Application Support/sandbar/state/root.crt"},
 		}

@@ -69,9 +69,18 @@ A standard user service need not be registered before setup.
 Run as the current user, without sudo:
 
 ```sh
-sandbar setup --check
-sandbar setup
+sandbar setup --check --http-port 8080 --https-port 8443
+sandbar setup --http-port 8080 --https-port 8443
 ```
+
+Fresh setup still defaults to HTTP 80 and HTTPS 443 when no port options are supplied.
+A macOS user service can fail to bind privileged ports with `permission denied`.
+Use the explicit high ports above in that case. Sandbar does not add a privileged service or port-forwarding rules.
+An omitted port option retains its saved value, or uses its fresh default if no value exists.
+Explicit choices persist in `config.json` for later start, route changes, reload, and repeated setup without port options.
+Ports must be valid, distinct, and different from app backend ports.
+Caddy HTTP/HTTPS port settings affect the shared service. Setup rejects conflicting existing explicit settings instead of replacing them.
+Review unrelated sites before selecting these settings.
 
 Do not pass `--home` or set `SANDBAR_HOME` during setup.
 Preview changes no files, services, or trust stores.
@@ -106,7 +115,10 @@ Caddy storage remains at `<prefix>/var/lib/caddy`, including its `sandbar` autho
 Sandbar copies only the public selected root to `~/Library/Application Support/sandbar/state/root.crt`.
 Service logs use `<prefix>/var/log/caddy.log`. Sandbar reports the verified path.
 
-Open `https://sandbar.localhost` after setup. HTTP port 80 redirects to HTTPS port 443.
+With the selected ports above, open `https://sandbar.localhost:8443` after setup.
+`http://sandbar.localhost:8080` redirects to that HTTPS URL, including port 8443.
+App URLs also include `:8443`, such as `https://app.sandbar.localhost:8443`.
+Sandbar uses the selected ports for redirects and fallback listeners without adding listeners on 80/443.
 The static welcome page has no backend and remains after removing the final app.
 Request trust separately with `sandbar trust`, then follow the [macOS browser steps](browser-trust.md#macos-manual-trust-and-removal).
 To remove trust later, keep the selected public root and request `sandbar untrust` explicitly.
@@ -171,7 +183,7 @@ Use `journalctl -u caddy.service` for service diagnostics.
 Open `https://sandbar.localhost` before or after adding apps.
 Caddy serves this static welcome page directly on local addresses, without a backend.
 The page stays available after the final app is removed. It is outside the JSON app list and `sandbar ls`.
-HTTP port 80 redirects to HTTPS port 443. Installed ports are fixed. Only private development homes support other ports.
+HTTP port 80 redirects to HTTPS port 443. Linux installed ports are fixed. macOS setup and private development homes support explicit port selections.
 
 Setup does not install certificate trust. Use `sandbar trust` explicitly as your normal user.
 Read the [browser guide](browser-trust.md), then verify the page and app in your browser.

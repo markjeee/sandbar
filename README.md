@@ -32,12 +32,15 @@ See [installation and upgrades](docs/install.md) for prerequisites, permissions,
 
 ## Set up Caddy
 
-On macOS, preview and apply setup as your normal user:
+On macOS, preview and apply setup as your normal user with explicit high ports:
 
 ```sh
-sandbar setup --check
-sandbar setup
+sandbar setup --check --http-port 8080 --https-port 8443
+sandbar setup --http-port 8080 --https-port 8443
 ```
+
+Fresh defaults remain 80/443. Use high ports when the macOS user service cannot bind privileged ports.
+Setup saves these ports for later commands and repeated setup.
 
 On Linux, use an administrator once:
 
@@ -51,7 +54,7 @@ Linux setup grants access to **all Caddy routes and files Caddy can read**. Revi
 **After Linux setup, log out and back in. A new terminal pane does not refresh group membership.**
 macOS setup starts the user service and registers login startup. It does not provide service before login.
 
-Request certificate trust explicitly as your normal user, then check `https://sandbar.localhost` in Chrome:
+Request trust as your normal user, then check `https://sandbar.localhost:8443` on macOS or `https://sandbar.localhost` on Linux:
 
 ```sh
 sandbar trust
@@ -68,8 +71,8 @@ sandbar add app.sandbar.localhost 8000
 sandbar status
 ```
 
-Open `https://app.sandbar.localhost` on this computer.
-Caddy uses ports 80 and 443. App backends must use other ports. HTTP redirects to HTTPS.
+Open `https://app.sandbar.localhost:8443` on macOS or `https://app.sandbar.localhost` on Linux.
+These examples use macOS ports 8080/8443 and Linux ports 80/443. Backends must use other ports. HTTP redirects to HTTPS.
 Changes apply without restarting Caddy. When stopped, they are saved for its next start.
 
 | Command | Result |
