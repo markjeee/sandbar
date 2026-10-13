@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/user"
@@ -13,7 +17,10 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func homebrewMetadata(prefix string) []byte {
@@ -561,5 +568,160 @@ func TestHomebrewEnvironmentOverrides(t *testing.T) {
 				t.Fatal("inspection changed override")
 			}
 		})
+	}
+}
+
+func TestDarwinStartupWait(t *testing.T) {
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	initialTLS := &routeTLSError{&net.OpError{Op: "remote error", Err: errors.New("tls: internal error")}}
+	attempts := 0
+	if err := waitForDarwinStartup(func() error {
+		attempts++
+		switch attempts {
+		case 1:
+			return refused
+		case 2:
+			return initialTLS
+		}
+		return nil
+	}, time.Second); err != nil || attempts != 3 {
+		t.Fatal(err, attempts)
+	}
+	attempts = 0
+	err := waitForDarwinStartup(func() error { attempts++; return refused }, 10*time.Millisecond)
+	if !errors.Is(err, syscall.ECONNREFUSED) || !strings.Contains(err.Error(), "did not become ready") || attempts != 1 {
+		t.Fatal(err, attempts)
+	}
+	for _, permanent := range []error{syscall.EACCES, &routeTLSError{errors.New("unknown authority")}, errors.New("welcome returned HTTP 503")} {
+		attempts = 0
+		err := waitForDarwinStartup(func() error { attempts++; return permanent }, time.Second)
+		if !errors.Is(err, permanent) || attempts != 1 {
+			t.Fatal(err, attempts)
+		}
+	}
+}
+
+func TestDarwinStartupDelayedTLSListener(t *testing.T) {
+	p, _ := testInstalledPaths(t)
+	certificate, root := statusCertificate(t, "sandbar.localhost")
+	if err := p.writeFile(p.rootCertificate(), root); err != nil {
+		t.Fatal(err)
+	}
+	roots, err := selectedStatusRoots(p.rootCertificate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	address := server.Listener.Addr().String()
+	_, port, _ := net.SplitHostPort(address)
+	httpsPort, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+	t.Cleanup(server.Close)
+	c := config{Version: 2, HTTPPort: 18080, HTTPSPort: httpsPort}
+	attempts := 0
+	err = waitForDarwinStartup(func() error {
+		attempts++
+		code, checkErr := checkHTTPSRoute(c, route{Hostname: "sandbar.localhost"}, roots)
+		if attempts == 1 {
+			if !errors.Is(checkErr, syscall.ECONNREFUSED) {
+				return fmt.Errorf("expected delayed listener refusal: %w", checkErr)
+			}
+			listener, err := net.Listen("tcp", address)
+			if err != nil {
+				return err
+			}
+			server.Listener = listener
+			server.StartTLS()
+		}
+		if checkErr != nil {
+			return checkErr
+		}
+		if code != 200 {
+			return fmt.Errorf("unexpected HTTP %d", code)
+		}
+		return nil
+	}, time.Second)
+	if err != nil || attempts != 2 {
+		t.Fatal(err, attempts)
+	}
+}
+
+func TestDarwinInstalledStartupChecksWelcomeOnly(t *testing.T) {
+	p, _ := testInstalledPaths(t)
+	c, _, root := statusHTTPS(t, "sandbar.localhost", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.Host, "sandbar.localhost:") {
+			w.WriteHeader(200)
+		} else {
+			t.Error("startup checked an app backend", r.Host)
+			w.WriteHeader(502)
+		}
+	}))
+	c.Routes = []route{{Hostname: "offline.sandbar.localhost", Upstream: "http://127.0.0.1:1"}}
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", c.routeURL("sandbar.localhost")+"/")
+		w.WriteHeader(308)
+	}))
+	defer redirect.Close()
+	c.HTTPPort = redirect.Listener.Addr().(*net.TCPAddr).Port
+	if err := p.writeFile(p.rootCertificate(), root); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForInstalledStartup(p, c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDarwinInstalledStartupRejectsRealTLSAndHTTPFailures(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		code      int
+		wrongRoot bool
+	}{{name: "HTTP failure", code: 503}, {name: "wrong root", code: 200, wrongRoot: true}} {
+		t.Run(test.name, func(t *testing.T) {
+			p, _ := testInstalledPaths(t)
+			var requests atomic.Int32
+			c, _, root := statusHTTPS(t, "sandbar.localhost", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1); w.WriteHeader(test.code) }))
+			if test.wrongRoot {
+				_, root = statusCertificate(t, "other.localhost")
+			}
+			if err := p.writeFile(p.rootCertificate(), root); err != nil {
+				t.Fatal(err)
+			}
+			err := waitForInstalledStartup(p, c)
+			if err == nil {
+				t.Fatal("accepted a startup failure")
+			}
+			if test.wrongRoot {
+				var tlsErr *routeTLSError
+				if !errors.As(err, &tlsErr) {
+					t.Fatal(err)
+				}
+			} else if requests.Load() != 1 || !strings.Contains(err.Error(), "HTTP 503") {
+				t.Fatal(err, requests.Load())
+			}
+		})
+	}
+}
+
+func TestDarwinSetupVerificationFailureRollsBack(t *testing.T) {
+	p, service := darwinSetupFixture(t)
+	failed := errors.New("simulated startup verification failure")
+	err := setupDarwin(p, setupOptions{}, io.Discard, io.Discard, func(paths, config) error { return failed })
+	if !errors.Is(err, failed) || !strings.Contains(err.Error(), "backup.json") {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(service.Actions) != "[start stop]" || service.State.State != "inactive" || service.State.Boot != "disabled" {
+		t.Fatal(service.Actions, service.State)
+	}
+	for _, path := range []string{p.installed.Config, p.config, p.generatedPath(), p.installed.Globals, p.file("setup.json")} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("rollback left %s: %v", path, err)
+		}
 	}
 }

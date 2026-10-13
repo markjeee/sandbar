@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 const installedFileMode os.FileMode = 0600
@@ -333,4 +336,47 @@ func checkHomebrewEnvironmentOverride() error {
 		return fmt.Errorf("custom Caddy service environment is unsupported: %s; review and remove the override before setup", path)
 	}
 	return nil
+}
+
+// Homebrew registers launchd before Caddy has opened its listeners.
+func waitForInstalledStartup(p paths, c config) error {
+	roots, err := selectedStatusRoots(p.rootCertificate())
+	if err != nil {
+		return err
+	}
+	err = waitForDarwinStartup(func() error {
+		code, err := checkHTTPSRoute(c, route{Hostname: "sandbar.localhost"}, roots)
+		if err != nil {
+			return err
+		}
+		if code >= 500 {
+			return fmt.Errorf("the Caddy welcome route returned HTTP %d", code)
+		}
+		return verifySetupRedirect(c, "sandbar.localhost")
+	}, 3*time.Second)
+	if err != nil {
+		return fmt.Errorf("wait for Caddy startup: %w; see %s", err, installedLogGuidance(p.installed))
+	}
+	return nil
+}
+
+func waitForDarwinStartup(check func() error, limit time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	for {
+		err := check()
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.ECONNREFUSED) && !initialCertificatePending(err) {
+			return err
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("the Caddy service did not become ready within %s: %w", limit, err)
+		case <-timer.C:
+		}
+	}
 }

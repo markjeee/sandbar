@@ -206,3 +206,5 @@ func systemOutput(binary string, args ...string) ([]byte, error) {
 	}
 	return out.Bytes(), nil
 }
+
+func waitForInstalledStartup(p paths, c config) error { return nil }

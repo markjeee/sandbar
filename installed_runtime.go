@@ -160,6 +160,9 @@ func startInstalled(p paths, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := waitForInstalledStartup(p, c); err != nil {
+		return err
+	}
 	fmt.Fprintln(out, "HTTPS:", c.routeURL("sandbar.localhost"))
 	for _, r := range c.Routes {
 		fmt.Fprintln(out, "HTTPS:", c.routeURL(r.Hostname))

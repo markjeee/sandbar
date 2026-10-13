@@ -30,7 +30,7 @@ func setup(args []string, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return setupDarwin(installedPaths(i), options, out, errOut, verifySetupRoutes)
+	return setupDarwin(installedPaths(i), options, out, errOut, verifyDarwinSetupRoutes)
 }
 
 // The route verifier is replaced only by setup tests whose service commands are simulated.
@@ -252,4 +252,11 @@ func restoreDarwinService(service serviceOperations, prior serviceState, out, er
 		return service.Control("kill", out, errOut)
 	}
 	return service.Control("stop", out, errOut)
+}
+
+func verifyDarwinSetupRoutes(p paths, c config) error {
+	if err := waitForInstalledStartup(p, c); err != nil {
+		return err
+	}
+	return verifySetupSites(p, c, c.Routes)
 }

@@ -507,3 +507,7 @@ func appendOptional(data []byte) []byte {
 	}
 	return append([]byte{}, data...)
 }
+
+func verifySetupRoutes(p paths, c config) error {
+	return verifySetupSites(p, c, append([]route{{Hostname: "sandbar.localhost"}}, c.Routes...))
+}

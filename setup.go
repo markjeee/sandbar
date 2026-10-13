@@ -176,12 +176,12 @@ func exportServiceRoot(p paths, undo *setupUndo) error {
 	}
 	return undo.write(p.rootCertificate(), data, installedRootMode, installedRootUID, installedRootUID)
 }
-func verifySetupRoutes(p paths, c config) error {
+func verifySetupSites(p paths, c config, sites []route) error {
 	roots, err := selectedStatusRoots(p.rootCertificate())
 	if err != nil {
 		return err
 	}
-	for _, r := range append([]route{{Hostname: "sandbar.localhost"}}, c.Routes...) {
+	for _, r := range sites {
 		code, err := waitForSetupCertificate(func() (int, error) { return checkHTTPSRoute(c, r, roots) }, 3*time.Second)
 		if err != nil {
 			return fmt.Errorf("verify setup route %s: %w", r.Hostname, err)
@@ -308,9 +308,7 @@ func waitForSetupCertificate(check func() (int, error), limit time.Duration) (in
 		if err == nil {
 			return code, nil
 		}
-		var tlsErr *routeTLSError
-		var remote *net.OpError
-		if !errors.As(err, &tlsErr) || !errors.As(tlsErr, &remote) || remote.Op != "remote error" || remote.Err.Error() != "tls: internal error" {
+		if !initialCertificatePending(err) {
 			return 0, err
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
@@ -321,4 +319,10 @@ func waitForSetupCertificate(check func() (int, error), limit time.Duration) (in
 		case <-timer.C:
 		}
 	}
+}
+
+func initialCertificatePending(err error) bool {
+	var tlsErr *routeTLSError
+	var remote *net.OpError
+	return errors.As(err, &tlsErr) && errors.As(tlsErr, &remote) && remote.Op == "remote error" && remote.Err.Error() == "tls: internal error"
 }
