@@ -40,7 +40,7 @@ func invokeCaddy(env []string, in io.Reader, out, errOut io.Writer, args ...stri
 
 func caddyEnv(p paths) []string {
 	if p.installed != nil {
-		return os.Environ()
+		return installedCaddyEnv(p.installed)
 	}
 	env := make([]string, 0, len(os.Environ())+5)
 	for _, item := range os.Environ() {
@@ -244,7 +244,7 @@ func start(p paths, out, errOut io.Writer) error {
 
 func stop(p paths, out, errOut io.Writer) error {
 	if p.installed != nil {
-		fmt.Fprintln(out, "Stopping Caddy stops all routes served by caddy.service.")
+		fmt.Fprintf(out, "Stopping Caddy stops all routes served by %s.\n", p.installed.Unit)
 		return p.installed.Service.Control("stop", out, errOut)
 	}
 	address, err := p.adminAddress()

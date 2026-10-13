@@ -1,10 +1,9 @@
-//go:build linux
-
 package main
 
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -44,5 +43,44 @@ func TestHelpRequestStopsAtArgumentSeparator(t *testing.T) {
 	}
 	if !commandHelpRequested([]string{"--replace", "--help"}) {
 		t.Fatal("help option not found")
+	}
+}
+
+func TestHelpMatchesNativePlatform(t *testing.T) {
+	commands := map[string][]string{
+		"setup":  {"--user", "--migrate-config", "systemd"},
+		"reload": {"/etc/sandbar/config.json"},
+		"status": {"boot startup"},
+		"start":  {"caddy.service", "journalctl"},
+		"stop":   {"does not disable Caddy's boot startup"},
+		"trust":  {"/var/lib/sandbar/root.crt"},
+	}
+	if runtime.GOOS == "darwin" {
+		commands = map[string][]string{
+			"setup":  {"current user's Homebrew Caddy service", "sandbar setup --check", "registers login startup"},
+			"reload": {"~/Library/Application Support/sandbar/config.json"},
+			"status": {"login startup"},
+			"start":  {"registers login startup", "<Homebrew prefix>/var/log/caddy.log"},
+			"stop":   {"unregisters login startup"},
+			"trust":  {"~/Library/Application Support/sandbar/state/root.crt"},
+		}
+	}
+	for command, want := range commands {
+		text, ok := helpText(command)
+		if !ok {
+			t.Fatalf("missing %s help", command)
+		}
+		for _, phrase := range want {
+			if !strings.Contains(text, phrase) {
+				t.Errorf("%s help missing %q", command, phrase)
+			}
+		}
+		if runtime.GOOS == "darwin" {
+			for _, phrase := range []string{"--user", "--migrate-config", "--migrate-state", "systemd", "journalctl", "boot startup"} {
+				if strings.Contains(text, phrase) {
+					t.Errorf("macOS %s help contains Linux instruction %q", command, phrase)
+				}
+			}
+		}
 	}
 }

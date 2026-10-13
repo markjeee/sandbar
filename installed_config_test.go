@@ -49,7 +49,7 @@ func TestInstalledRoutes(t *testing.T) {
 }
 
 func TestInstalledComposition(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortHome(t)
 	topPath := filepath.Join(dir, "Caddyfile")
 	globalPath := filepath.Join(dir, "global.Caddyfile")
 	routePath := filepath.Join(dir, "routes.Caddyfile")
@@ -96,7 +96,7 @@ func TestInstalledComposition(t *testing.T) {
 }
 
 func TestInstalledStaticImportsAndDrift(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortHome(t)
 	sites := filepath.Join(dir, "sites")
 	if err := os.Mkdir(sites, 0700); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestInstalledStaticImportsAndDrift(t *testing.T) {
 func TestInstalledUnsupportedImports(t *testing.T) {
 	for _, text := range []string{"import {$SITES}\n", "import {args[0]}\n", "import snippet\n", "import ./foo arg\n", "respond <<HTML\nx\nHTML\n"} {
 		t.Run(text, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := shortHome(t)
 			top := filepath.Join(dir, "Caddyfile")
 			if err := os.WriteFile(top, []byte(text), 0600); err != nil {
 				t.Fatal(err)
@@ -166,7 +166,7 @@ func TestInstalledAdaptedSafety(t *testing.T) {
 		t.Skip("Caddy not installed")
 	}
 	c := config{Version: 2, HTTPPort: 80, HTTPSPort: 443, Routes: []route{{"app.sandbar.localhost", "8000"}}}
-	dir := t.TempDir()
+	dir := shortHome(t)
 	admin := "unix/" + filepath.Join(dir, "admin.sock")
 	routes, err := renderInstalledRoutes(c, false)
 	if err != nil {
@@ -227,7 +227,7 @@ func TestInstalledAdaptedSafety(t *testing.T) {
 }
 
 func TestInstalledStockOnly(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortHome(t)
 	top := filepath.Join(dir, "Caddyfile")
 	source := []byte("# Caddy welcome\n:80 {\n# default root\nroot * /usr/share/caddy\nfile_server\n}\n# preserve\n")
 	if err := os.WriteFile(top, source, 0600); err != nil {
@@ -278,7 +278,7 @@ func TestInstalledWelcomeAndUnknownHost(t *testing.T) {
 		return listener.Addr().(*net.TCPAddr).Port
 	}
 	httpPort, httpsPort := port(), port()
-	dir := t.TempDir()
+	dir := shortHome(t)
 	admin := "unix/" + filepath.Join(dir, "admin.sock")
 	routes, err := renderInstalledRoutes(config{Version: 2, HTTPPort: 80, HTTPSPort: 443}, false)
 	if err != nil {
@@ -342,7 +342,7 @@ func TestInstalledWelcomeAndUnknownHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if socketInfo.Mode().Perm() != 0660 {
+	if socketInfo.Mode().Perm() != installedFileMode {
 		t.Fatalf("admin socket mode: %v", socketInfo.Mode())
 	}
 	code, location, _, err := request("sandbar.localhost")
@@ -398,7 +398,7 @@ func TestInstalledCustomCatchallRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := shortHome(t)
 	admin := "unix/" + filepath.Join(dir, "admin.sock")
 	source := "{\n" + renderInstalledGlobals(admin, "", "") + "}\n" + routes + "http://:80 {\nbind 127.0.0.1\nrespond custom\n}\n"
 	path := filepath.Join(dir, "Caddyfile")
@@ -413,7 +413,7 @@ func TestInstalledCustomCatchallRejected(t *testing.T) {
 }
 
 func TestInstalledStaticFilenameImport(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortHome(t)
 	top := filepath.Join(dir, "Caddyfile")
 	source := []byte("import sites\n")
 	if err := os.WriteFile(top, source, 0600); err != nil {

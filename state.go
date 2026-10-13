@@ -60,8 +60,7 @@ func (p paths) workDir() string {
 }
 func (p paths) adminAddress() (string, error) {
 	socket := p.file("admin.sock")
-	// Linux sockaddr_un.sun_path has 108 bytes, including the terminator.
-	if len(socket) > 107 {
+	if len(socket) > socketPathLimit {
 		return "", fmt.Errorf("admin socket path is too long; use --home with a shorter path: %s", socket)
 	}
 	if strings.ContainsAny(socket, "{}|") {
@@ -94,7 +93,7 @@ func withLock(p paths, action func() error) error {
 	}
 	mode := os.FileMode(0600)
 	if p.installed != nil {
-		mode = 0660
+		mode = installedFileMode
 	}
 	file, err := os.OpenFile(p.file("router.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, mode)
 	if err != nil {

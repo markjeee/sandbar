@@ -1,0 +1,565 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/user"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+func homebrewMetadata(prefix string) []byte {
+	metadata := map[string]any{"formulae": []any{map[string]any{"name": "caddy", "installed": []any{map[string]any{"version": "2.11.7"}}, "service": map[string]any{"run": []string{prefix + "/opt/caddy/bin/caddy", "run", "--config", prefix + "/etc/Caddyfile"}, "environment_variables": map[string]string{"HOME": prefix + "/var/lib", "XDG_DATA_HOME": prefix + "/var/lib"}, "log_path": prefix + "/var/log/caddy.log", "error_log_path": prefix + "/var/log/caddy.log"}}}}
+	data, _ := json.Marshal(metadata)
+	return data
+}
+func TestHomebrewInstallationMetadata(t *testing.T) {
+	account := &user.User{Uid: "501", Gid: "20", Username: "developer", HomeDir: "/Users/developer"}
+	data := homebrewMetadata("/custom brew")
+	i, err := homebrewInstallation("/custom brew", data, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i.Binary != "/custom brew/opt/caddy/bin/caddy" || i.Config != "/custom brew/etc/Caddyfile" || i.Storage != "/custom brew/var/lib/caddy" || i.Source != "/Users/developer/Library/Application Support/sandbar/config.json" || i.Unit != "sh.brew.caddy" {
+		t.Fatal(i)
+	}
+	for _, change := range []func(string) string{
+		func(s string) string { return strings.Replace(s, `"run","--config"`, `"run","--resume","--config"`, 1) },
+		func(s string) string {
+			return strings.Replace(s, `"HOME":"/custom brew/var/lib"`, `"HOME":"/other"`, 1)
+		},
+		func(s string) string {
+			return strings.Replace(s, `"installed":[{"version":"2.11.7"}]`, `"installed":[]`, 1)
+		},
+		func(s string) string { return strings.Replace(s, `"name":"caddy"`, `"name":"other"`, 1) },
+	} {
+		if _, err := homebrewInstallation("/custom brew", []byte(change(string(data))), account); err == nil {
+			t.Fatal("accepted incompatible formula")
+		}
+	}
+}
+
+func TestDarwinSocketPathBoundary(t *testing.T) {
+	for _, length := range []int{socketPathLimit, socketPathLimit + 1} {
+		p := paths{state: "/" + strings.Repeat("a", length-len("/admin.sock")-1)}
+		address, err := p.adminAddress()
+		if length == socketPathLimit && (err != nil || len(strings.TrimPrefix(address, "unix/")) != length) {
+			t.Fatal(address, err)
+		}
+		if length > socketPathLimit && err == nil {
+			t.Fatal("accepted overlong socket")
+		}
+	}
+}
+
+func loadedHomebrewJob(i *installation) string {
+	return fmt.Sprintf("program = %s\narguments = {\n%s\nrun\n--config\n%s\n}\nenvironment = {\nHOME => %s\nXDG_DATA_HOME => %s\nXPC_SERVICE_NAME => %s\n}\nstate = running\n", i.Binary, i.Binary, i.Config, filepath.Dir(i.Storage), filepath.Dir(i.Storage), i.Unit)
+}
+func TestLoadedHomebrewJob(t *testing.T) {
+	i, err := homebrewInstallation("/custom brew", homebrewMetadata("/custom brew"), &user.User{Uid: "501", Gid: "20", HomeDir: "/Users/developer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := loadedHomebrewJob(i)
+	if err := checkLoadedHomebrewJob(i, []byte(valid)); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		strings.Replace(valid, "\nrun\n", "\nrun\n--resume\n", 1),
+		strings.Replace(valid, "HOME => /custom brew/var/lib", "HOME => /other", 1),
+		strings.Replace(valid, "XPC_SERVICE_NAME =>", "XDG_CONFIG_HOME => /other\nXPC_SERVICE_NAME =>", 1),
+		strings.Replace(valid, "program = "+i.Binary, "program = /other/caddy", 1),
+	} {
+		if err := checkLoadedHomebrewJob(i, []byte(bad)); err == nil {
+			t.Fatal("accepted incompatible loaded job", bad)
+		}
+	}
+}
+
+func TestHomebrewCommandsAndStorageEnvironment(t *testing.T) {
+	p, _ := testInstalledPaths(t)
+	callsPath := fakeCaddy(t)
+	p.installed.Binary = filepath.Join(filepath.Dir(callsPath), "caddy")
+	p.installed.Storage = filepath.Join(p.state, "service-storage/caddy")
+	s := &homebrewService{brew: p.installed.Binary, installation: p.installed}
+	t.Setenv("HOME", "/caller-home")
+	t.Setenv("XDG_CONFIG_HOME", "/caller-config")
+	t.Setenv("CADDY_ADMIN", "localhost:9999")
+	// Fake Caddy records the exact argv without running Homebrew or changing a service.
+	for _, action := range []string{"reload"} {
+		if err := s.Control(action, io.Discard, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Validate(io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	address, _ := p.adminAddress()
+	want := [][]string{{"reload", "--config", p.installed.Config, "--force", "--address", address}, {"validate", "--config", p.file("validation/Caddyfile"), "--adapter", "caddyfile"}}
+	if !reflect.DeepEqual(readCalls(t, callsPath), want) {
+		t.Fatal(readCalls(t, callsPath))
+	}
+	env := strings.Join(installedCaddyEnv(p.installed), "\n")
+	if !strings.Contains(env, "HOME="+filepath.Dir(p.installed.Storage)) || !strings.Contains(env, "XDG_DATA_HOME="+filepath.Dir(p.installed.Storage)) || strings.Contains(env, "/caller-config") || strings.Contains(env, "CADDY_ADMIN=") {
+		t.Fatal("wrong service environment")
+	}
+	if err := s.Control("restart", io.Discard, io.Discard); err == nil {
+		t.Fatal("accepted unsupported action")
+	}
+	// A command wrapper records start/stop and forwards their output and errors.
+	wrapper := filepath.Join(shortHome(t), "brew")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$FAKE_CALLS\"\nprintf '%s\\n' -- >> \"$FAKE_CALLS\"\nprintf 'service output\\n'\nprintf 'service diagnostic\\n' >&2\nexit \"${SERVICE_EXIT:-0}\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	s.brew = wrapper
+	var out, errOut bytes.Buffer
+	for _, action := range []string{"start", "stop", "run", "kill"} {
+		if err := s.Control(action, &out, &errOut); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := readCalls(t, callsPath)
+	for n, action := range []string{"start", "stop", "run", "kill"} {
+		if !reflect.DeepEqual(calls[n+2], []string{"services", action, "caddy"}) {
+			t.Fatal(calls)
+		}
+	}
+	if !strings.Contains(out.String(), "service output") || !strings.Contains(errOut.String(), "service diagnostic") {
+		t.Fatal(out.String(), errOut.String())
+	}
+	t.Setenv("SERVICE_EXIT", "17")
+	if err := s.Control("start", io.Discard, io.Discard); err == nil {
+		t.Fatal("discarded failed service command")
+	}
+}
+
+func TestDarwinSetupRejectsLinuxOptions(t *testing.T) {
+	for _, args := range [][]string{{"--user", "developer"}, {"--migrate-config", "old.json"}, {"--migrate-state", "old-state"}, {"unexpected"}} {
+		var diagnostic bytes.Buffer
+		if err := setup(args, io.Discard, &diagnostic); err == nil {
+			t.Fatal(args)
+		}
+	}
+}
+
+type darwinSetupService struct {
+	fakeService
+	installation *installation
+	validations  int
+	failAction   string
+	activeFile   string
+}
+
+func (s *darwinSetupService) Validate(out, errOut io.Writer) error {
+	s.validations++
+	if s.ValidateErr != nil {
+		return s.ValidateErr
+	}
+	return (&homebrewService{installation: s.installation}).Validate(out, errOut)
+}
+func (s *darwinSetupService) Control(action string, out, errOut io.Writer) error {
+	s.Actions = append(s.Actions, action)
+	if action == s.failAction {
+		s.failAction = ""
+		return errors.New("simulated activation failure")
+	}
+	switch action {
+	case "start":
+		s.State = serviceState{State: "active", Boot: "enabled"}
+	case "stop":
+		s.State = serviceState{State: "inactive", Boot: "disabled"}
+	case "run":
+		s.State = serviceState{State: "active", Boot: "disabled"}
+	case "kill":
+		s.State = serviceState{State: "inactive", Boot: "enabled"}
+	case "reload":
+		if s.activeFile != "" {
+			data, err := adaptCaddyfile(installedPaths(s.installation), s.installation.Config, errOut)
+			if err != nil {
+				return err
+			}
+			return atomicWriteMode(s.activeFile, data, 0600, -1, -1)
+		}
+	}
+	return nil
+}
+func darwinSetupFixture(t *testing.T) (paths, *darwinSetupService) {
+	t.Helper()
+	requireIntegration(t)
+	binary, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := shortHome(t)
+	i := &installation{ID: "homebrew-fixture-v1", Binary: binary, Unit: "fixture.caddy", Config: filepath.Join(root, "brew/Caddyfile"), Globals: filepath.Join(root, "app/state/global.Caddyfile"), Source: filepath.Join(root, "app/config.json"), State: filepath.Join(root, "app/state"), Storage: filepath.Join(root, "service-storage/caddy"), UID: os.Getuid(), GID: os.Getgid(), GroupID: os.Getgid(), Account: "fixture"}
+	if err := os.MkdirAll(filepath.Dir(i.Config), 0700); err != nil {
+		t.Fatal(err)
+	}
+	service := &darwinSetupService{installation: i, fakeService: fakeService{State: serviceState{State: "inactive", Boot: "disabled"}}}
+	i.Service = service
+	return installedPaths(i), service
+}
+func setupFixtureVerified(p paths, c config) error {
+	if c.HTTPPort != 80 || c.HTTPSPort != 443 {
+		return errors.New("setup changed installed ports")
+	}
+	_, err := selectedStatusRoots(p.rootCertificate())
+	return err
+}
+func TestDarwinSetupPreviewFreshRepeatAndRollback(t *testing.T) {
+	p, service := darwinSetupFixture(t)
+	var out, diagnostic bytes.Buffer
+	if err := setupDarwin(p, setupOptions{Check: true}, &out, &diagnostic, setupFixtureVerified); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	if !strings.Contains(out.String(), "Create missing Caddyfile:") || !strings.Contains(out.String(), "Login startup:") {
+		t.Fatal(out.String())
+	}
+	for _, path := range []string{p.installed.Config, filepath.Dir(p.config)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("preview mutated %s: %v", path, err)
+		}
+	}
+	if len(service.Actions) > 0 || service.validations > 0 {
+		t.Fatal("preview mutated service")
+	}
+	apply := func() error { return setupDarwin(p, setupOptions{}, &out, &diagnostic, setupFixtureVerified) }
+	if err := apply(); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	if fmt.Sprint(service.Actions) != "[start]" || service.validations != 1 {
+		t.Fatal(service.Actions, service.validations)
+	}
+	root := readTestFile(t, p.rootCertificate())
+	top := readTestFile(t, p.installed.Config)
+	cfg, err := readConfig(p.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Routes = append(cfg.Routes, route{Hostname: "kept.sandbar.localhost", Upstream: "8000"})
+	source, err := configBytes(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.writeFile(p.config, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := apply(); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	if !bytes.Equal(root, readTestFile(t, p.rootCertificate())) || !bytes.Equal(top, readTestFile(t, p.installed.Config)) || !bytes.Equal(source, readTestFile(t, p.config)) {
+		t.Fatal("repeat changed CA, top file, or routes")
+	}
+	if bytes.Count(readTestFile(t, p.installed.Config), []byte(globalMarkerStart)) != 1 {
+		t.Fatal("duplicated integration")
+	}
+	if err := filepath.WalkDir(filepath.Dir(p.config), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		want := os.FileMode(0600)
+		if entry.IsDir() {
+			want = 0700
+		}
+		if info.Mode().Perm() != want {
+			return fmt.Errorf("%s mode %o, want %o", path, info.Mode().Perm(), want)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := readTestFile(t, p.generatedPath())
+	service.failAction = "start"
+	if err := apply(); err == nil || !strings.Contains(err.Error(), "backup.json") || strings.Contains(err.Error(), "external directory edit preserved") {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, readTestFile(t, p.generatedPath())) || !bytes.Equal(root, readTestFile(t, p.rootCertificate())) || service.State.State != "active" || service.State.Boot != "enabled" {
+		t.Fatal("rollback lost files or prior service state")
+	}
+	backups, err := filepath.Glob(p.file("backups/setup-*/backup.json"))
+	if err != nil || len(backups) != 3 {
+		t.Fatal(backups, err)
+	}
+}
+func TestDarwinSetupExistingConfigAndRejectedCandidates(t *testing.T) {
+	for _, test := range []struct {
+		name, top string
+		wantError bool
+	}{
+		{"unrelated", "http://other.localhost:19090 {\nbind 127.0.0.1\nrespond unrelated\n}\n", false},
+		{"admin conflict", "{\nadmin localhost:2019\n}\n", true},
+		{"syntax", "http://other.localhost:19090 {\ninvalid_directive\n}\n", true},
+		{"hostname conflict", "https://sandbar.localhost {\nrespond conflict\n}\n", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p, service := darwinSetupFixture(t)
+			original := []byte(test.top)
+			if err := os.WriteFile(p.installed.Config, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out, diagnostic bytes.Buffer
+			err := setupDarwin(p, setupOptions{}, &out, &diagnostic, setupFixtureVerified)
+			if test.wantError {
+				if err == nil {
+					t.Fatal("accepted conflict")
+				}
+				if len(service.Actions) > 0 {
+					t.Fatal("activated rejected configuration", service.Actions)
+				}
+				if !bytes.Equal(original, readTestFile(t, p.installed.Config)) {
+					t.Fatal("changed rejected config")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err, diagnostic.String())
+			}
+			if !bytes.Contains(readTestFile(t, p.installed.Config), original) {
+				t.Fatal("lost unrelated site")
+			}
+			if err := setupDarwin(p, setupOptions{}, &out, &diagnostic, setupFixtureVerified); err != nil {
+				t.Fatal(err, diagnostic.String())
+			}
+		})
+	}
+}
+func TestDarwinServiceRollbackRegistration(t *testing.T) {
+	for _, test := range []struct {
+		prior serviceState
+		want  []string
+	}{
+		{serviceState{State: "active", Boot: "enabled"}, []string{"start", "reload"}},
+		{serviceState{State: "active", Boot: "disabled"}, []string{"stop", "run"}},
+		{serviceState{State: "failed", Boot: "enabled"}, []string{"start", "kill"}},
+		{serviceState{State: "inactive", Boot: "disabled"}, []string{"stop"}},
+	} {
+		service := &fakeService{}
+		if err := restoreDarwinService(service, test.prior, io.Discard, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(service.Actions, test.want) {
+			t.Fatal(test.prior, service.Actions)
+		}
+	}
+}
+func TestDarwinInstalledTrustFailureForwarding(t *testing.T) {
+	p, service := testInstalledPaths(t)
+	calls := fakeCaddy(t)
+	p.installed.Binary = filepath.Join(filepath.Dir(calls), "caddy")
+	t.Setenv("FAKE_TRUST_EXIT", strconv.Itoa(19))
+	t.Setenv("FAKE_DIAGNOSTIC", "partial trust failure")
+	for _, command := range []string{"trust", "untrust"} {
+		if err := p.writeFile(p.rootCertificate(), []byte("public root")); err != nil {
+			t.Fatal(err)
+		}
+		var out, diagnostic bytes.Buffer
+		err := changeTrust(p, command, &out, &diagnostic)
+		var result *caddyError
+		if !errors.As(err, &result) || result.code != 19 {
+			t.Fatal("discarded trust exit status", err)
+		}
+		if !strings.Contains(diagnostic.String(), "partial trust failure") {
+			t.Fatal(diagnostic.String())
+		}
+	}
+	if len(service.Actions) > 0 {
+		t.Fatal("trust changed service")
+	}
+}
+
+func TestHomebrewServiceStates(t *testing.T) {
+	i, err := homebrewInstallation("/brew", homebrewMetadata("/brew"), &user.User{Uid: "501", Gid: "20", HomeDir: "/Users/developer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := 1
+	for _, test := range []struct {
+		name        string
+		entry       homebrewServiceInfo
+		job         []byte
+		state, boot string
+		wantError   bool
+	}{
+		{name: "unregistered", state: "inactive", boot: "disabled"},
+		{name: "registered stopped", entry: homebrewServiceInfo{Registered: true}, state: "failed", boot: "enabled"},
+		{name: "failed", entry: homebrewServiceInfo{ExitCode: &code}, state: "failed", boot: "disabled"},
+		{name: "active", entry: homebrewServiceInfo{Registered: true, Running: true, Loaded: true}, job: []byte(loadedHomebrewJob(i)), state: "active", boot: "enabled"},
+		{name: "active unregistered", entry: homebrewServiceInfo{Running: true, Loaded: true}, job: []byte(loadedHomebrewJob(i)), state: "active", boot: "disabled"},
+		{name: "inconsistent", entry: homebrewServiceInfo{Running: true}, wantError: true},
+		{name: "incompatible", entry: homebrewServiceInfo{Running: true}, job: []byte("program = /other/caddy"), wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state, err := homebrewServiceState(i, test.entry, test.job)
+			if (err != nil) != test.wantError {
+				t.Fatal(state, err)
+			}
+			if !test.wantError && (state.State != test.state || state.Boot != test.boot) {
+				t.Fatal(state)
+			}
+		})
+	}
+}
+func TestHomebrewServiceInspectionFailure(t *testing.T) {
+	p, _ := testInstalledPaths(t)
+	dir := shortHome(t)
+	wrapper := filepath.Join(dir, "brew")
+	// Inspection fails before any launchd command or mutation is attempted.
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nprintf 'inspection denied\\n' >&2\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	service := &homebrewService{brew: wrapper, installation: p.installed}
+	state, err := service.Inspect()
+	if err == nil || state.State != "inaccessible" || state.Boot != "unknown" || !strings.Contains(state.Diagnostic, "inspection denied") {
+		t.Fatal(state, err)
+	}
+	if launchdJobMissing(errors.New("permission denied"), p.installed.Unit) {
+		t.Fatal("treated inspection failure as missing")
+	}
+}
+func TestHomebrewExistingJobCompatibility(t *testing.T) {
+	p, _ := testInstalledPaths(t)
+	i := p.installed
+	i.Fragment = filepath.Join(shortHome(t), "caddy.plist")
+	i.Log = "/fixture/caddy.log"
+	job := map[string]any{"Label": i.Unit, "ProgramArguments": []string{i.Binary, "run", "--config", i.Config}, "EnvironmentVariables": map[string]string{"HOME": filepath.Dir(i.Storage), "XDG_DATA_HOME": filepath.Dir(i.Storage)}, "StandardOutPath": i.Log, "StandardErrorPath": i.Log}
+	data, _ := json.Marshal(job)
+	if err := os.WriteFile(i.Fragment, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkHomebrewJob(i); err != nil {
+		t.Fatal(err)
+	}
+	job["ProgramArguments"] = []string{i.Binary, "run", "--resume", "--config", i.Config}
+	data, _ = json.Marshal(job)
+	if err := os.WriteFile(i.Fragment, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkHomebrewJob(i); err == nil {
+		t.Fatal("accepted customized job")
+	}
+}
+func TestDarwinStartRegistersActiveUnregisteredService(t *testing.T) {
+	p, service := darwinSetupFixture(t)
+	var diagnostic bytes.Buffer
+	if err := setupDarwin(p, setupOptions{}, io.Discard, &diagnostic, setupFixtureVerified); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	adapted, err := adaptCaddyfile(p, p.installed.Config, &diagnostic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transactionAdmin(t, p, string(adapted))
+	service.Actions = nil
+	service.State = serviceState{State: "active", Boot: "disabled"}
+	before := service.validations
+	if err := startInstalled(p, io.Discard, &diagnostic); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	if fmt.Sprint(service.Actions) != "[start]" || service.State.Boot != "enabled" || service.validations != before+1 {
+		t.Fatal(service.Actions, service.State, service.validations)
+	}
+}
+
+func TestDarwinInstalledRouteChanges(t *testing.T) {
+	p, service := darwinSetupFixture(t)
+	unrelated := []byte("http://other.localhost:19090 {\nbind 127.0.0.1\nrespond unrelated\n}\n")
+	if err := os.WriteFile(p.installed.Config, unrelated, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var diagnostic bytes.Buffer
+	if err := setupDarwin(p, setupOptions{}, io.Discard, &diagnostic, setupFixtureVerified); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	service.State = serviceState{State: "inactive", Boot: "disabled"}
+	service.Actions = nil
+	change := func(args ...string) error {
+		return withLock(p, func() error { return changeRoutes(p, "add", args, io.Discard, &diagnostic) })
+	}
+	if err := change("first.sandbar.localhost", "8000"); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	if len(service.Actions) > 0 {
+		t.Fatal("stopped edit activated service", service.Actions)
+	}
+	adapted, err := adaptCaddyfile(p, p.installed.Config, &diagnostic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.activeFile = transactionAdmin(t, p, string(adapted))
+	service.State = serviceState{State: "active", Boot: "enabled"}
+	root := readTestFile(t, p.rootCertificate())
+	if err := change("second.sandbar.localhost", "8001"); err != nil {
+		t.Fatal(err, diagnostic.String())
+	}
+	if fmt.Sprint(service.Actions) != "[reload]" {
+		t.Fatal("live route change restarted service", service.Actions)
+	}
+	source, generated := readTestFile(t, p.config), readTestFile(t, p.generatedPath())
+	service.ValidateErr = errors.New("simulated validation failure")
+	if err := change("rejected.sandbar.localhost", "8002"); err == nil {
+		t.Fatal("accepted rejected candidate")
+	}
+	service.ValidateErr = nil
+	service.failAction = "reload"
+	if err := change("failed.sandbar.localhost", "8003"); err == nil {
+		t.Fatal("discarded reload failure")
+	}
+	if !bytes.Equal(source, readTestFile(t, p.config)) || !bytes.Equal(generated, readTestFile(t, p.generatedPath())) || !bytes.Equal(root, readTestFile(t, p.rootCertificate())) || !bytes.Contains(readTestFile(t, p.installed.Config), unrelated) {
+		t.Fatal("failed change lost committed state")
+	}
+	if _, err := os.Stat(p.file("transaction")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed reload did not recover", err)
+	}
+}
+
+func TestHomebrewEnvironmentOverrides(t *testing.T) {
+	for _, test := range []struct{ name, xdg, brewXDG, root string }{
+		{name: "home", root: ".homebrew"},
+		{name: "XDG", xdg: "xdg", root: "xdg/homebrew"},
+		{name: "Homebrew XDG", brewXDG: "brew-xdg", root: "brew-xdg/homebrew"},
+		{name: "XDG precedence", xdg: "xdg", brewXDG: "brew-xdg", root: "xdg/homebrew"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := shortHome(t)
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", "")
+			t.Setenv("HOMEBREW_XDG_CONFIG_HOME", "")
+			if test.xdg != "" {
+				t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, test.xdg))
+			}
+			if test.brewXDG != "" {
+				t.Setenv("HOMEBREW_XDG_CONFIG_HOME", filepath.Join(home, test.brewXDG))
+			}
+			if err := checkHomebrewEnvironmentOverride(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(home, test.root, "services/caddy.env")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			data := []byte("HOME=/unsupported/storage\n")
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := checkHomebrewEnvironmentOverride(); err == nil || !strings.Contains(err.Error(), path) {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(data, readTestFile(t, path)) {
+				t.Fatal("inspection changed override")
+			}
+		})
+	}
+}

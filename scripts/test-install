@@ -1,9 +1,17 @@
 #!/bin/sh
-# Run real checkout builds and remote installation through controlled curl fixtures.
+# Run native checkout builds and download installation through controlled fixtures.
 set -eu
 umask 077
 
-project_dir=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
+project_dir=$(CDPATH='' cd -P "$(dirname "$0")/.." && pwd)
+case "$(uname -s):$(uname -m)" in
+    Linux:x86_64|Linux:amd64) target_os=linux; target_arch=amd64; native_system=Linux; native_machine=x86_64 ;;
+    Darwin:arm64) target_os=darwin; target_arch=arm64; native_system=Darwin; native_machine=arm64 ;;
+    *) echo 'Installer tests require Linux amd64 or macOS arm64.' >&2; exit 1 ;;
+esac
+version=v0.1.0-beta.3-candidate
+asset="sandbar_${version}_${target_os}_${target_arch}"
+archive="$asset.tar.gz"
 # Test homes select install destinations, while Go keeps the caller's caches.
 GOMODCACHE=$(go -C "$project_dir" env GOMODCACHE)
 GOCACHE=$(go -C "$project_dir" env GOCACHE)
@@ -21,10 +29,16 @@ expect_failure() {
         fail "command unexpectedly succeeded: $*"
     fi
 }
+assert_regular() {
+    [ -f "$1" ] && [ ! -L "$1" ] && [ -x "$1" ] || fail 'installed executable is not a regular executable'
+}
 assert_preserved() {
     cmp "$test_dir/previous" "$test_dir/bin/sandbar" || fail 'existing executable changed after failure'
-    [ -x "$test_dir/bin/sandbar" ] || fail 'existing executable lost its executable mode'
+    assert_regular "$test_dir/bin/sandbar"
     [ "$("$test_dir/bin/sandbar")" = previous ] || fail 'previous executable stopped working'
+}
+check_checksums() {
+    if [ "$target_os" = linux ]; then sha256sum -c SHA256SUMS; else shasum -a 256 -c SHA256SUMS; fi
 }
 
 mkdir "$test_dir/home" "$test_dir/bin" "$test_dir/fixtures" "$test_dir/tools"
@@ -32,24 +46,31 @@ printf '#!/bin/sh\necho previous\n' > "$test_dir/previous"
 chmod 755 "$test_dir/previous"
 cp "$test_dir/previous" "$test_dir/bin/sandbar"
 
-printf '%s\n' 'Testing real checkout installation from another directory'
-(cd "$test_dir" && HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir "$test_dir/local bin") > "$test_dir/output.log" 2>&1 || fail 'checkout installation'
-[ "$("$test_dir/local bin/sandbar" --version)" = 'sandbar development' ] || fail 'checkout executable version'
-HOME="$test_dir/home" sh "$project_dir/install.sh" > "$test_dir/output.log" 2>&1 || fail 'default checkout installation'
-[ -x "$test_dir/home/.local/bin/sandbar" ] || fail 'checkout default destination'
+printf '%s\n' 'Testing real native checkout installation and atomic replacement'
+ln "$test_dir/bin/sandbar" "$test_dir/old-inode"
+(cd "$test_dir" && HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir bin) > "$test_dir/output.log" 2>&1 || fail 'checkout installation'
+assert_regular "$test_dir/bin/sandbar"
+[ "$("$test_dir/bin/sandbar" --version)" = 'sandbar development' ] || fail 'checkout executable version'
+cmp "$test_dir/previous" "$test_dir/old-inode" || fail 'checkout upgrade modified the old inode'
+rm "$test_dir/old-inode"
+(cd "$test_dir" && HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir "$test_dir/local bin") > "$test_dir/output.log" 2>&1 || fail 'quoted checkout destination'
+assert_regular "$test_dir/local bin/sandbar"
+cp "$test_dir/previous" "$test_dir/bin/sandbar"
 
-printf '%s\n' 'Preparing and checking real release assets'
-"$project_dir/scripts/release" "$test_dir/fixtures" > "$test_dir/output.log" 2>&1 || fail 'release build'
-(cd "$test_dir/fixtures" && sha256sum -c SHA256SUMS) > "$test_dir/output.log" 2>&1 || fail 'release checksums'
-[ "$("$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64" --version)" = 'sandbar v0.1.0-beta.2' ] || fail 'release executable version'
-tar -tzf "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz" > "$test_dir/contents"
+printf '%s\n' 'Preparing and checking real native candidate assets'
+"$project_dir/scripts/release" --version "$version" "$test_dir/fixtures" > "$test_dir/output.log" 2>&1 || fail 'candidate build'
+(cd "$test_dir/fixtures" && check_checksums) > "$test_dir/output.log" 2>&1 || fail 'candidate checksums'
+[ "$("$test_dir/fixtures/$asset" --version)" = "sandbar $version" ] || fail 'candidate executable version'
+tar -tzf "$test_dir/fixtures/$archive" > "$test_dir/contents"
 printf 'sandbar\nLICENSE\ninstall.sh\nRELEASE_NOTES.md\n' > "$test_dir/expected"
-cmp "$test_dir/contents" "$test_dir/expected" || fail 'release archive layout'
-cmp "$project_dir/install.sh" "$test_dir/fixtures/install.sh" || fail 'release installer differs from checkout'
-go version -m "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64" > "$test_dir/build-info"
-grep 'CGO_ENABLED=0' "$test_dir/build-info" >/dev/null || fail 'release build uses CGO'
-grep 'GOARCH=amd64' "$test_dir/build-info" >/dev/null || fail 'release architecture'
-grep 'GOOS=linux' "$test_dir/build-info" >/dev/null || fail 'release operating system'
+cmp "$test_dir/contents" "$test_dir/expected" || fail 'candidate archive layout'
+sed "s/^version='[^']*'/version='$version'/" "$project_dir/install.sh" > "$test_dir/expected-installer"
+cmp "$test_dir/expected-installer" "$test_dir/fixtures/install.sh" || fail 'candidate installer version pin'
+grep 'Unreleased local candidate' "$test_dir/fixtures/RELEASE_NOTES.md" >/dev/null || fail 'candidate notes imply publication'
+go version -m "$test_dir/fixtures/$asset" > "$test_dir/build-info"
+grep 'CGO_ENABLED=0' "$test_dir/build-info" >/dev/null || fail 'candidate build uses CGO'
+grep "GOARCH=$target_arch" "$test_dir/build-info" >/dev/null || fail 'candidate architecture'
+grep "GOOS=$target_os" "$test_dir/build-info" >/dev/null || fail 'candidate operating system'
 
 cat > "$test_dir/tools/curl" <<'CURL'
 #!/bin/sh
@@ -57,12 +78,12 @@ set -eu
 [ "$#" = 4 ] && [ "$1" = -fsSL ] && [ "$3" = -o ] || exit 90
 printf '%s\n' "$2" >> "$FAKE_CURL_LOG"
 case "${FAKE_DOWNLOAD_FAIL:-none}:$2" in
-    archive:*/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz|manifest:*/SHA256SUMS) exit 22 ;;
+    archive:*.tar.gz|manifest:*/SHA256SUMS) exit 22 ;;
 esac
 case "$2" in
-    https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz)
-        cp "$FAKE_RELEASE_DIR/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz" "$4" ;;
-    https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/SHA256SUMS)
+    "https://github.com/markjeee/sandbar/releases/download/$FAKE_VERSION/$FAKE_ARCHIVE")
+        cp "$FAKE_RELEASE_DIR/$FAKE_ARCHIVE" "$4" ;;
+    "https://github.com/markjeee/sandbar/releases/download/$FAKE_VERSION/SHA256SUMS")
         cp "$FAKE_RELEASE_DIR/SHA256SUMS" "$4" ;;
     *) exit 91 ;;
 esac
@@ -70,37 +91,84 @@ CURL
 cat > "$test_dir/tools/uname" <<'UNAME'
 #!/bin/sh
 case "$1" in
-    -s) printf '%s\n' "${FAKE_SYSTEM:-Linux}" ;;
-    -m) printf '%s\n' "${FAKE_MACHINE:-x86_64}" ;;
+    -s) printf '%s\n' "$FAKE_SYSTEM" ;;
+    -m) printf '%s\n' "$FAKE_MACHINE" ;;
     *) exit 1 ;;
 esac
 UNAME
 chmod 755 "$test_dir/tools/curl" "$test_dir/tools/uname"
 FAKE_RELEASE_DIR="$test_dir/fixtures"
 FAKE_CURL_LOG="$test_dir/curl.log"
-export FAKE_RELEASE_DIR FAKE_CURL_LOG
+FAKE_VERSION=$version
+FAKE_ARCHIVE=$archive
+FAKE_SYSTEM=$native_system
+FAKE_MACHINE=$native_machine
+export FAKE_RELEASE_DIR FAKE_CURL_LOG FAKE_VERSION FAKE_ARCHIVE FAKE_SYSTEM FAKE_MACHINE
 PATH="$test_dir/tools:$PATH"
 export PATH
 remote_install() {
     cat "$test_dir/fixtures/install.sh" | HOME="$test_dir/remote home" sh -s -- "$@"
 }
 
-printf '%s\n' 'Testing piped versioned release installation and atomic replacement'
-remote_install > "$test_dir/output.log" 2>&1 || fail 'default remote installation'
-[ "$("$test_dir/remote home/.local/bin/sandbar" --version)" = 'sandbar v0.1.0-beta.2' ] || fail 'default remote destination'
+printf '%s\n' 'Checking platform defaults without writing to installed locations'
+for installer in "$project_dir/install.sh" "$test_dir/fixtures/install.sh"; do
+    FAKE_SYSTEM=Darwin FAKE_MACHINE=arm64 sh "$installer" --help > "$test_dir/output.log"
+    grep 'Default executable: /usr/local/bin/sandbar' "$test_dir/output.log" >/dev/null || fail 'macOS default destination'
+    FAKE_SYSTEM=Linux FAKE_MACHINE=x86_64 HOME="$test_dir/home" sh "$installer" --help > "$test_dir/output.log"
+    grep -F "Default executable: $test_dir/home/.local/bin/sandbar" "$test_dir/output.log" >/dev/null || fail 'Linux default destination'
+done
+
+# A download installation must not use Go, even if it appears in PATH.
+cat > "$test_dir/tools/go" <<'GO'
+#!/bin/sh
+echo 'controlled build failure' >&2
+exit 1
+GO
+chmod 755 "$test_dir/tools/go"
+printf '%s\n' 'Testing piped candidate installation and atomic replacement without Go'
+remote_install --bin-dir "$test_dir/remote bin" > "$test_dir/output.log" 2>&1 || fail 'remote installation'
+assert_regular "$test_dir/remote bin/sandbar"
+[ "$("$test_dir/remote bin/sandbar" --version)" = "sandbar $version" ] || fail 'remote installed version'
 ln "$test_dir/bin/sandbar" "$test_dir/old-inode"
-remote_install --bin-dir "$test_dir/bin" > "$test_dir/output.log" 2>&1 || fail 'remote override installation'
-[ "$("$test_dir/bin/sandbar" --version)" = 'sandbar v0.1.0-beta.2' ] || fail 'remote installed version'
-cmp "$test_dir/previous" "$test_dir/old-inode" || fail 'upgrade modified old executable inode'
+remote_install --bin-dir "$test_dir/bin" > "$test_dir/output.log" 2>&1 || fail 'remote replacement'
+assert_regular "$test_dir/bin/sandbar"
+cmp "$test_dir/previous" "$test_dir/old-inode" || fail 'remote upgrade modified old inode'
 [ "$(wc -l < "$test_dir/curl.log")" -eq 4 ] || fail 'remote download count'
 cp "$test_dir/previous" "$test_dir/bin/sandbar"
 
-printf '%s\n' 'Testing rejected checksums and failed upgrades'
-cp "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz" "$test_dir/good-archive"
-printf 'damaged package\n' >> "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz"
+if [ "$target_os" = darwin ]; then
+    printf '%s\n' 'Testing simulated privileged publication without installed writes'
+    mkdir "$test_dir/publication-parent"
+    chmod 500 "$test_dir/publication-parent"
+    FAKE_PUBLISH_PARENT="$test_dir/publication-parent"
+    FAKE_SUDO_LOG="$test_dir/sudo.log"
+    export FAKE_PUBLISH_PARENT FAKE_SUDO_LOG
+    cat > "$test_dir/tools/sudo" <<'SUDO'
+#!/bin/sh
+set -eu
+printf '%s\n' "$1" >> "$FAKE_SUDO_LOG"
+# Only this test-owned directory needs a simulated privilege change.
+chmod u+w "$FAKE_PUBLISH_PARENT"
+exec "$@"
+SUDO
+    chmod 755 "$test_dir/tools/sudo"
+    remote_install --bin-dir "$test_dir/publication-parent/bin" > "$test_dir/output.log" 2>&1 || fail 'simulated privileged installation'
+    assert_regular "$test_dir/publication-parent/bin/sandbar"
+    [ "$(stat -f %Lp "$test_dir/publication-parent/bin")" = 755 ] || fail 'new privileged directory is not traversable'
+    printf 'mkdir\nmktemp\ncp\nchmod\nmv\n' > "$test_dir/expected-sudo"
+    cmp "$test_dir/sudo.log" "$test_dir/expected-sudo" || fail 'privilege exceeded final publication'
+    mkdir "$test_dir/existing-bin"
+    chmod 700 "$test_dir/existing-bin"
+    remote_install --bin-dir "$test_dir/existing-bin" > "$test_dir/output.log" 2>&1 || fail 'existing-directory installation'
+    [ "$(stat -f %Lp "$test_dir/existing-bin")" = 700 ] || fail 'existing destination permissions changed'
+fi
+
+printf '%s\n' 'Testing failed downloads, rejected checksums, and failed builds'
+cp "$test_dir/fixtures/$archive" "$test_dir/good-archive"
+printf 'damaged package\n' >> "$test_dir/fixtures/$archive"
 expect_failure remote_install --bin-dir "$test_dir/bin"
 assert_preserved
-cp "$test_dir/good-archive" "$test_dir/fixtures/sandbar_v0.1.0-beta.2_linux_amd64.tar.gz"
+cp "$test_dir/good-archive" "$test_dir/fixtures/$archive"
 for failed_asset in archive manifest; do
     FAKE_DOWNLOAD_FAIL=$failed_asset
     export FAKE_DOWNLOAD_FAIL
@@ -113,33 +181,36 @@ printf 'not the package checksum\n' > "$test_dir/fixtures/SHA256SUMS"
 expect_failure remote_install --bin-dir "$test_dir/bin"
 assert_preserved
 cp "$test_dir/good-checksums" "$test_dir/fixtures/SHA256SUMS"
-
-cat > "$test_dir/tools/go" <<'GO'
-#!/bin/sh
-# Simulate a compiler failure before the destination can be replaced.
-echo 'controlled build failure' >&2
-exit 1
-GO
-chmod 755 "$test_dir/tools/go"
+# A correctly hashed invalid archive must still leave the old executable intact.
+printf 'invalid archive\n' > "$test_dir/fixtures/$archive"
+(cd "$test_dir/fixtures" && if [ "$target_os" = linux ]; then sha256sum "$archive"; else shasum -a 256 "$archive"; fi) > "$test_dir/fixtures/SHA256SUMS"
+expect_failure remote_install --bin-dir "$test_dir/bin"
+assert_preserved
+cp "$test_dir/good-archive" "$test_dir/fixtures/$archive"
+cp "$test_dir/good-checksums" "$test_dir/fixtures/SHA256SUMS"
 expect_failure env HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir "$test_dir/bin"
 assert_preserved
 
-printf '%s\n' 'Testing unsupported platforms and argument errors'
-FAKE_SYSTEM=Darwin
-export FAKE_SYSTEM
-expect_failure remote_install --bin-dir "$test_dir/bin"
+printf '%s\n' 'Testing unavailable published macOS assets and unsupported targets'
+published_install() {
+    cat "$project_dir/install.sh" | sh -s -- --bin-dir "$test_dir/bin"
+}
+FAKE_SYSTEM=Darwin FAKE_MACHINE=arm64 expect_failure published_install
+grep 'has no macOS release asset' "$test_dir/output.log" >/dev/null || fail 'beta.2 availability error'
 assert_preserved
-unset FAKE_SYSTEM
-FAKE_MACHINE=aarch64
-export FAKE_MACHINE
-expect_failure remote_install --bin-dir "$test_dir/bin"
-expect_failure env HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir "$test_dir/bin"
-assert_preserved
-unset FAKE_MACHINE
+for unsupported in Darwin:x86_64 Linux:aarch64 Windows:arm64; do
+    FAKE_SYSTEM=${unsupported%:*}
+    FAKE_MACHINE=${unsupported#*:}
+    expect_failure remote_install --bin-dir "$test_dir/bin"
+    expect_failure env HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir "$test_dir/bin"
+    assert_preserved
+done
+FAKE_SYSTEM=$native_system
+FAKE_MACHINE=$native_machine
 expect_failure remote_install --bin-dir
 expect_failure remote_install --unknown
 mkdir "$test_dir/directory-destination" "$test_dir/directory-destination/sandbar"
 expect_failure remote_install --bin-dir "$test_dir/directory-destination"
 [ -d "$test_dir/directory-destination/sandbar" ] || fail 'directory destination changed'
 [ -z "$(find "$test_dir/bin" -name '.sandbar.*' -print)" ] || fail 'temporary executable remains'
-printf '%s\n' 'Installer and release tests passed.'
+printf '%s\n' 'Installer and native candidate tests passed.'

@@ -1,6 +1,6 @@
 # Sandbar user reference
 
-These commands describe the standard Caddy service integration in beta.2 and later.
+These commands describe apt/systemd on Linux and unreleased Homebrew user-service support on macOS arm64.
 Beta.1 uses a private user router. See [installation and migration](install.md) before upgrading.
 
 ## App names and addresses
@@ -34,13 +34,17 @@ Removing a route never removes certificate trust.
 Candidates are checked with Caddy before saving. Changes apply without restarting a running Caddy.
 When stopped, changes are saved without starting Caddy. Use `sandbar start` when ready.
 A rejected `reload` keeps your edited source for correction and leaves active routes unchanged.
-Ordinary commands need no sudo after setup and logging out and back in.
+On Linux, ordinary commands need no sudo after setup and logging out and back in.
 A new terminal pane is not a new login session and may retain the old groups.
-`stop` affects every Caddy route, including unrelated sites. It does not disable boot startup.
+On macOS, setup and ordinary commands run as the current user.
+`stop` affects every Caddy route, including unrelated sites.
+Linux stop preserves boot startup. macOS stop removes login registration, and start registers it again.
+The macOS user service does not provide boot-before-login operation.
 
 ## Read status results
 
-`status` reports service state, boot startup, and access to Caddy's private control socket.
+`status` reports service state, startup registration, and access to Caddy's private control socket.
+Startup means boot enablement on Linux and login registration on macOS.
 Development status checks the selected private router.
 It reports pending source edits, differences from active configuration, and pending recovery.
 
@@ -50,7 +54,7 @@ It does not follow redirects. Stopped routers report apps as unchecked.
 HTTP codes appear separately from TLS and connection errors.
 HTTP 5xx means failure. Other HTTP responses show reachability, not application health.
 
-The exit code is nonzero for stopped or inaccessible routers, incomplete boot setup, pending configuration or recovery, or failed checks.
+The exit code is nonzero for stopped or inaccessible routers, incomplete startup setup, pending configuration or recovery, or failed checks.
 Invalid configuration and missing required root certificates are errors.
 The built-in welcome page is separate from configured app checks.
 Status does not prove browser trust, system DNS resolution, or operating-system listeners.
@@ -58,7 +62,12 @@ See the [browser guide](browser-trust.md) for explicit trust, manual imports, an
 
 ## Configuration
 
-Installed app list: `/etc/sandbar/config.json`. Installed state: `/var/lib/sandbar`.
+| Platform | Installed app list | Installed state |
+| --- | --- | --- |
+| Linux | `/etc/sandbar/config.json` | `/var/lib/sandbar` |
+| macOS | `~/Library/Application Support/sandbar/config.json` | `~/Library/Application Support/sandbar/state` |
+
+macOS owned directories use `0700` and private files use `0600` under the current user.
 Without a home override, commands use the standard service.
 An explicit `--home`, or `SANDBAR_HOME` when the flag is absent, selects a [private development router](development.md#private-development-homes).
 
@@ -87,19 +96,22 @@ Version 1 remains readable. A successful `add` or `rm` converts it to version 2.
 Conversion first saves the exact source in `config.v1.backup.json` beside `config.json`.
 An identical version 1 addition also performs this conversion.
 
-The standard service keeps `/etc/caddy/Caddyfile` as its main configuration.
+Linux keeps `/etc/caddy/Caddyfile`. macOS keeps `<Homebrew prefix>/etc/Caddyfile`.
 Setup adds marked imports and preserves unrelated supported sites and settings.
 Everyday commands change only Sandbar's owned route file.
 Read [supported Caddy configurations](install.md#supported-caddy-configurations) before combining sites.
 
 ## Router state and recovery
 
-One installed lock serializes changes across authorized users. Private homes have separate locks.
-Shared files may belong to their last writer while retaining the `sandbar` group and required access modes.
-Caddy keeps installed CA keys in service storage. The public root is `/var/lib/sandbar/root.crt`.
+One installed lock serializes route changes. Private homes have separate locks.
+Linux shared files may belong to their last writer while retaining the `sandbar` group and required access modes.
+macOS state belongs only to the current user.
+Caddy keeps installed CA keys in its service storage, preserving unrelated CAs.
+The public root is `root.crt` in the installed state directory above.
 Private development routers use separate logs, control sockets, and certificates.
 An active or inaccessible private socket prevents another private start.
-Use `journalctl -u caddy.service` for installed logs.
+Use `journalctl -u caddy.service` for Linux logs. macOS uses `<Homebrew prefix>/var/log/caddy.log`.
+Sandbar reports the verified log path.
 
 Sandbar saves previous and candidate files before publication or reload.
 Recovery runs before initialization, route changes, and startup.

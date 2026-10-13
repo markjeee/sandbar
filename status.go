@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,7 +26,7 @@ func status(p paths, out, errOut io.Writer) error {
 		var err error
 		service, err = p.installed.Service.Inspect()
 		fmt.Fprintln(out, "Service:", service.State)
-		fmt.Fprintln(out, "Boot startup:", service.Boot)
+		fmt.Fprintln(out, startupLabel+":", service.Boot)
 		if err != nil {
 			failures = append(failures, err)
 		}
@@ -33,7 +34,7 @@ func status(p paths, out, errOut io.Writer) error {
 			failures = append(failures, fmt.Errorf("the Caddy service is %s", service.State))
 		}
 		if service.Boot != "enabled" {
-			failures = append(failures, errors.New("the Caddy boot startup is disabled or unknown"))
+			failures = append(failures, fmt.Errorf("the Caddy %s is disabled or unknown", strings.ToLower(startupLabel)))
 		}
 	}
 	active, adminErr := readActiveConfig(p)

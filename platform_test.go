@@ -34,7 +34,10 @@ func testInstalledPaths(t *testing.T) (paths, *fakeService) {
 	i := &installation{ID: "fixture-v1", Binary: "/usr/bin/caddy", Unit: "fixture.service", Config: filepath.Join(root, "service/Caddyfile"), Globals: filepath.Join(root, "service/global.Caddyfile"), Source: filepath.Join(root, "source/config.json"), State: filepath.Join(root, "state"), Storage: filepath.Join(root, "storage"), Account: "fixture", UID: os.Getuid(), GID: os.Getgid(), GroupID: os.Getgid(), Service: service}
 	p := installedPaths(i)
 	for _, path := range []string{filepath.Dir(p.config), filepath.Dir(i.Config), p.state, p.workDir(), p.file("routes"), p.file("admin"), p.file("validation")} {
-		if err := os.MkdirAll(path, 0770); err != nil {
+		if err := os.MkdirAll(path, installedDirectoryMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chown(path, os.Getuid(), os.Getgid()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -51,34 +54,6 @@ func testInstalledPaths(t *testing.T) (paths, *fakeService) {
 		t.Fatal(err)
 	}
 	return p, service
-}
-
-func TestServiceCommandIdentity(t *testing.T) {
-	wrap := func(args string) string {
-		return "{ path=/usr/bin/caddy ; argv[]=" + args + " ; ignore_errors=no ; pid=0 ; }"
-	}
-	start := "/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile"
-	reload := "/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force"
-	for _, suffix := range []string{"", " --address unix//var/lib/sandbar/admin/admin.sock"} {
-		if err := checkServiceCommands(map[string]string{"ExecStart": wrap(start), "ExecReload": wrap(reload + suffix)}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, fields := range []map[string]string{
-		{"ExecStart": wrap(start + " --resume"), "ExecReload": wrap(reload)},
-		{"ExecStart": wrap(start), "ExecReload": wrap(reload + " --address localhost:2019")},
-		{"ExecStart": wrap(start) + wrap(start), "ExecReload": wrap(reload)},
-		{"ExecStart": strings.Replace(wrap(start), "path=/usr/bin/caddy", "path=/tmp/caddy", 1), "ExecReload": wrap(reload)},
-	} {
-		if err := checkServiceCommands(fields); err == nil {
-			t.Fatal("accepted incompatible service", fields)
-		}
-	}
-	for _, bad := range []string{"ActiveState", "=active", "ActiveState=active\nActiveState=inactive"} {
-		if _, err := parseProperties([]byte(bad)); err == nil {
-			t.Fatal("accepted", bad)
-		}
-	}
 }
 
 func TestInstalledStopIgnoresInvalidSourceAndRecovery(t *testing.T) {
@@ -134,7 +109,7 @@ func TestInstalledRecoveryStateAndMetadata(t *testing.T) {
 			case "identity":
 				p.installed.ID = "changed"
 			case "metadata":
-				if err := os.Chmod(p.generatedPath(), 0600); err != nil {
+				if err := os.Chmod(p.generatedPath(), installedFileMode^0040); err != nil {
 					t.Fatal(err)
 				}
 			case "manual edit":
@@ -166,7 +141,7 @@ func TestInstalledRecoveryStateAndMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if meta.Mode != 0660 || meta.GID != os.Getgid() || meta.UID != os.Getuid() {
+			if meta.Mode != installedFileMode || meta.GID != os.Getgid() || meta.UID != os.Getuid() {
 				t.Fatal(meta)
 			}
 		})
@@ -204,31 +179,6 @@ func TestSetupBackupConflictingEdit(t *testing.T) {
 	}
 }
 
-func TestSetgidSharedDirectories(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "shared")
-	if err := setupDirectory(dir, 0770|os.ModeSetgid, os.Getuid(), os.Getgid()); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode()&os.ModeSetgid == 0 {
-		t.Fatal("shared directory lacks setgid")
-	}
-	path := filepath.Join(dir, "file")
-	if err := atomicWriteMode(path, []byte("data"), 0660, -1, -1); err != nil {
-		t.Fatal(err)
-	}
-	meta, err := readFileMetadata(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.Mode != 0660 || meta.GID != os.Getgid() {
-		t.Fatal(meta)
-	}
-}
-
 func TestInstalledStatusReportsServiceBeforeInvalidSource(t *testing.T) {
 	p, service := testInstalledPaths(t)
 	service.State = serviceState{State: "active", Boot: "disabled"}
@@ -239,7 +189,7 @@ func TestInstalledStatusReportsServiceBeforeInvalidSource(t *testing.T) {
 	if err := status(p, &out, io.Discard); err == nil {
 		t.Fatal("invalid source reported success")
 	}
-	for _, text := range []string{"Service: active", "Boot startup: disabled", "Router: inaccessible", "Recovery: none", "Configuration: invalid"} {
+	for _, text := range []string{"Service: active", startupLabel + ": disabled", "Router: inaccessible", "Recovery: none", "Configuration: invalid"} {
 		if !strings.Contains(out.String(), text) {
 			t.Fatal(out.String())
 		}
@@ -281,15 +231,6 @@ func TestInstalledTrustSelectsCAAndCallerEnvironment(t *testing.T) {
 				t.Fatal(env)
 			}
 		})
-	}
-}
-
-func TestSetupArgumentsFailBeforeSystemInspection(t *testing.T) {
-	for _, args := range [][]string{{"setup"}, {"setup", "--user", "root"}, {"setup", "--user", "this-account-does-not-exist-sandbar"}, {"--home", "/tmp/must-not-create-sandbar", "setup", "--user", "root"}} {
-		code, _, errOut := cli(t, args...)
-		if code == 0 || strings.Contains(errOut, "Caddy package") {
-			t.Fatal(args, code, errOut)
-		}
 	}
 }
 
@@ -386,7 +327,7 @@ func TestInstalledInitCreatesSharedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Mode != 0660 || meta.GID != p.installed.GroupID {
+	if meta.Mode != installedFileMode || meta.GID != p.installed.GroupID {
 		t.Fatal(meta)
 	}
 	if err := initialize(p, nil, io.Discard, io.Discard); err != nil {

@@ -23,7 +23,7 @@ const routesMarkerEnd = "# END SANDBAR ROUTES\n"
 
 func renderInstalledGlobals(adminAddress, rootCert, rootKey string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "admin %s\nskip_install_trust\npki {\n\tca sandbar {\n\t\tname \"sandbar local CA\"\n", strconv.Quote(adminAddress+"|0660"))
+	fmt.Fprintf(&b, "admin %s\nskip_install_trust\npki {\n\tca sandbar {\n\t\tname \"sandbar local CA\"\n", strconv.Quote(adminAddress+"|"+installedSocketMode))
 	if rootCert != "" && rootKey != "" {
 		fmt.Fprintf(&b, "\t\troot {\n\t\t\tcert %s\n\t\t\tkey %s\n\t\t}\n", strconv.Quote(rootCert), strconv.Quote(rootKey))
 	}
@@ -242,7 +242,7 @@ func composeInstalledConfig(topPath string, topBytes []byte, globalPath, routePa
 	}
 	top = append(top, []byte(routesMarkerStart+"import "+strconv.Quote(routePath)+"\n"+routesMarkerEnd)...)
 	result.Top = top
-	result.Candidate, result.Manifest, err = composeCandidate(topPath, top, map[string][]byte{filepath.Clean(globalPath): globals, filepath.Clean(routePath): routes}, routePath)
+	result.Candidate, result.Manifest, err = composeCandidate(topPath, top, map[string][]byte{filepath.Clean(topPath): top, filepath.Clean(globalPath): globals, filepath.Clean(routePath): routes}, routePath)
 	return result, err
 }
 
@@ -496,7 +496,7 @@ func checkInstalledAdapted(data []byte, c config, admin string) error {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("decode adapted Caddy configuration: %w", err)
 	}
-	if doc.Admin.Disabled || doc.Admin.Listen != admin+"|0660" {
+	if doc.Admin.Disabled || doc.Admin.Listen != admin+"|"+installedSocketMode {
 		return errors.New("the Caddy admin conflicts with Sandbar's private endpoint")
 	}
 	if len(doc.Storage) > 0 && string(doc.Storage) != "null" {

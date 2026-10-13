@@ -1,13 +1,15 @@
 # Install Sandbar
 
-Sandbar targets Linux amd64. Native acceptance uses Ubuntu 24.04.
-The installed service integration supports apt-packaged Caddy with systemd, Polkit, and sudo.
-Install those prerequisites separately. Sandbar packages need no Go runtime.
-Other packages, service managers, macOS, and Windows are not supported by this integration.
+The checkout supports Linux amd64 and macOS arm64. Published beta.2 supports Linux amd64 only.
+Linux uses apt-packaged Caddy with systemd, Polkit, and sudo. Ubuntu 24.04 is its acceptance target.
+macOS uses native Homebrew Caddy and the current user's launchd service.
+Install prerequisites separately. Sandbar packages need no Go runtime.
+Other Caddy packages, Intel Macs, and Windows are outside these integrations.
+Automated native checks establish development readiness. Real macOS installation checks remain separate.
 
 ## Release installation
 
-Install `v0.1.0-beta.2`:
+Install `v0.1.0-beta.2` on Linux amd64:
 
 ```sh
 curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/install.sh | sh
@@ -16,7 +18,7 @@ curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/i
 The versioned installer downloads the matching archive and checks its SHA-256 checksum before replacing `sandbar`.
 The checksum comes from the same HTTPS release. It checks transfer integrity, not an independent signature.
 
-The default destination is `~/.local/bin`. Select another directory with `--bin-dir`:
+The published beta.2 destination defaults to `~/.local/bin` on Linux. Select another directory with `--bin-dir`:
 
 ```sh
 curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/install.sh | sh -s -- --bin-dir "$HOME/bin"
@@ -24,6 +26,9 @@ curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/i
 
 Make sure the selected directory is in `PATH`, or use the full executable path.
 The installer does not edit shell profiles, install Caddy, start services, or change certificate trust.
+
+Beta.2 has no macOS release asset. Its installer cannot install Sandbar on macOS.
+Use checkout installation until a native release is published. Local candidates do not establish public download availability.
 
 ## Checkout installation
 
@@ -38,6 +43,15 @@ sh ./install.sh --bin-dir "$HOME/bin"
 The checkout installer builds the current local source, including uncommitted changes.
 It locates source beside the script, so invocation from another working directory also works.
 The source executable reports `development` unless the source version was changed.
+The checkout installer builds for the host: darwin/arm64 on macOS or linux/amd64 on Linux.
+macOS defaults to the regular executable `/usr/local/bin/sandbar`, without a symlink or application bundle.
+Linux keeps `~/.local/bin/sandbar`. Both support `--bin-dir`.
+Application configuration and state remain separate from the executable.
+
+Build or download as your normal user. On macOS, the installer requests administrator access only if final publication needs it.
+Do not run the complete checkout build with sudo.
+Use a writable `--bin-dir` to avoid that request, and make sure that directory is in PATH.
+The installer does not edit shell profiles.
 Both methods reject unsupported operating systems and architectures.
 
 Downloads, checksums, and builds finish before the executable is replaced.
@@ -45,7 +59,66 @@ The final temporary file shares the destination directory, so replacement uses a
 A failed download, checksum check, or build preserves the installed executable.
 The installer removes its temporary files when it exits.
 
+## Connect Homebrew Caddy on macOS
+
+Use a native arm64 Homebrew installation with Caddy v2.11.7 or a later v2 release.
+Sandbar checks formula paths, the service command, storage environment, and existing launchd job before changing configuration.
+A root-managed service or incompatible job must be resolved separately. Sandbar does not replace it or start a fallback router.
+A standard user service need not be registered before setup.
+
+Run as the current user, without sudo:
+
+```sh
+sandbar setup --check
+sandbar setup
+```
+
+Do not pass `--home` or set `SANDBAR_HOME` during setup.
+Preview changes no files, services, or trust stores.
+It reports application paths, planned Caddyfile changes, backups, service actions, login startup, and conflicts.
+Review conflicts before applying. Setup does not accept Linux `--user`, `--migrate-config`, or `--migrate-state` options.
+
+Setup creates a missing `<Homebrew prefix>/etc/Caddyfile` or preserves supported unrelated content in an existing file.
+`--replace-default-site` authorizes only a recognized stock welcome block. It never authorizes replacement of custom sites.
+Setup validates the complete candidate before activation and backs up changed files.
+Repeated matching setup preserves routes, CA identity, and single owned imports.
+Ordinary errors restore prior files, running state, and service registration where safe.
+Conflicting external edits remain intact. Failures report backup paths and unresolved restoration steps.
+
+Setup and installed `start` use `brew services start caddy`, registering startup for this user's login.
+Installed `stop` uses `brew services stop caddy`, stopping all Caddy routes and removing login registration.
+A later `sandbar start` registers it again. This user service does not provide boot-before-login operation.
+Registration alone does not prove that a later login starts Caddy.
+No Sandbar daemon, system LaunchDaemon, group access grant, or Linux policy is installed.
+
+The installed layout is:
+
+```text
+/usr/local/bin/sandbar                         # Regular standalone executable
+~/Library/Application Support/sandbar/
+├── config.json                               # App list
+└── state/                                    # Private runtime files and setup backups
+```
+
+Owned directories use `0700`, and private files and the control socket permit only this user.
+The Homebrew Caddyfile remains at `<prefix>/etc/Caddyfile`.
+Caddy storage remains at `<prefix>/var/lib/caddy`, including its `sandbar` authority and unrelated CAs.
+Sandbar copies only the public selected root to `~/Library/Application Support/sandbar/state/root.crt`.
+Service logs use `<prefix>/var/log/caddy.log`. Sandbar reports the verified path.
+
+Open `https://sandbar.localhost` after setup. HTTP port 80 redirects to HTTPS port 443.
+The static welcome page has no backend and remains after removing the final app.
+Request trust separately with `sandbar trust`, then follow the [macOS browser steps](browser-trust.md#macos-manual-trust-and-removal).
+To remove trust later, keep the selected public root and request `sandbar untrust` explicitly.
+Stopping or removing the executable does not remove certificates, routes, or trust.
+There is no automatic macOS uninstaller. Review setup backups before restoring owned Caddy changes and preserve unrelated content.
+
+Real service, browser trust, exact-root removal, and new-login checks remain pending until each installation acceptance check runs.
+See the [installation checklist](development.md#macos-installation-acceptance).
+
 ## Connect the standard Caddy service
+
+This section applies to apt/systemd on Linux amd64.
 
 Install apt-packaged [Caddy](https://caddyserver.com/docs/install) v2.11.7 or a later stable v2 release first.
 The integration checks package and service metadata, not just whether `apt` or `systemctl` exists.
@@ -105,6 +178,8 @@ Read the [browser guide](browser-trust.md), then verify the page and app in your
 
 ## Access and removal
 
+This section applies to Linux access grants. macOS uses the invoking user without a shared group or policy.
+
 Setup adds the named account to the `sandbar` group without replacing its other memberships.
 Members can change Sandbar's app list, generated routes, and private Caddy control socket.
 **This is access to all Caddy routes and files the Caddy service can read.**
@@ -151,8 +226,9 @@ See [browser trust removal](browser-trust.md#remove-trust) for the separate cert
 
 ## Supported Caddy configurations
 
-The standard service keeps `/etc/caddy/Caddyfile` as its main configuration.
-Setup adds marked imports for root-owned global integration and `/var/lib/sandbar/routes/Caddyfile`.
+Linux keeps `/etc/caddy/Caddyfile` as its main configuration.
+macOS keeps `<Homebrew prefix>/etc/Caddyfile` and private integration files in Application Support.
+Setup adds marked imports for owned global integration and generated routes. Linux routes use `/var/lib/sandbar/routes/Caddyfile`.
 It preserves unrelated configuration bytes and Caddy's existing `local` CA.
 Sandbar uses the separate CA ID `sandbar`. Private development homes keep CA ID `local`.
 
@@ -174,6 +250,8 @@ Do not edit Sandbar's generated route file directly.
 For everyday route recovery, follow the [user reference](reference.md#router-state-and-recovery).
 
 ## Upgrade from the private router
+
+This legacy migration applies to Linux. macOS does not import legacy Linux state.
 
 Beta.1 uses a private router. Beta.2 uses the standard Caddy service by default.
 Installing beta.2 does not migrate routes, stop the old router, or change trust.
@@ -223,6 +301,8 @@ Do not import another root merely because the CA storage path changed.
 Keep backups until route, TLS, browser, service, and boot checks are complete.
 
 ## Setup and migration recovery
+
+The following commands and backup paths apply to Linux setup and migration. macOS setup reports its Application Support backup path.
 
 Ordinary setup errors restore prior file and service state where safe.
 Failed startup or migrated route verification also attempts to restart the identified legacy router.
@@ -293,23 +373,35 @@ If the original state or restart command cannot be established, retain all evide
 
 ## Release preparation
 
-From the checkout:
+Published beta.2 assets and their historical release notes remain Linux-only.
+Prepare a distinct unreleased native candidate from the checkout:
 
 ```sh
-scripts/release
-cd .sandbox/release/v0.1.0-beta.2
-sha256sum -c SHA256SUMS
-./sandbar_v0.1.0-beta.2_linux_amd64 --version
+scripts/release --version v0.1.0-beta.3-candidate
+cd .sandbox/release/v0.1.0-beta.3-candidate
 ```
 
-`scripts/release [output-directory]` prepares these assets without publishing:
+On macOS arm64, verify the package with native tools:
 
-- `sandbar_v0.1.0-beta.2_linux_amd64`, a static executable.
-- `sandbar_v0.1.0-beta.2_linux_amd64.tar.gz`, containing `sandbar`, `LICENSE`, `install.sh`, and `RELEASE_NOTES.md`.
-- `install.sh`, pinned to this release.
-- `RELEASE_NOTES.md`.
+```sh
+shasum -a 256 -c SHA256SUMS
+./sandbar_v0.1.0-beta.3-candidate_darwin_arm64 --version
+```
+
+On Linux amd64, use `sha256sum -c SHA256SUMS` and the `_linux_amd64` executable.
+Run native packaging on the corresponding platform. Do not build or test Linux on the development Mac.
+`scripts/release --version <candidate-version> [output-directory]` prepares these assets without publishing:
+
+- `sandbar_<version>_<os>_<arch>`, the native executable.
+- The matching `.tar.gz`, containing `sandbar`, `LICENSE`, `install.sh`, and `RELEASE_NOTES.md`.
+- `install.sh`, pinned to the candidate version.
+- `RELEASE_NOTES.md`, identifying the local candidate.
 - `SHA256SUMS`, covering the executable, archive, installer, and release notes.
 
-Run `scripts/test-install` to test checkout builds and controlled release downloads.
-Existing `v0.1.0-beta.1` tags and assets remain unchanged. Publish new versions under their own tags.
-Verify public downloads and installation after publishing a release.
+Default output is `.sandbox/release/<version>/`. An explicit directory overrides it.
+The legacy no-option beta.2 packaging path remains Linux-only.
+Run `scripts/test-install` to test checkout builds and controlled release downloads into temporary destinations.
+These checks select platform defaults without writing to `/usr/local/bin`.
+A local candidate is unsigned development output, not a published or notarized macOS release.
+Keep existing beta.1 and beta.2 tags and assets unchanged. Publish new versions separately under their own tags.
+Verify public downloads and installation only after publication.
