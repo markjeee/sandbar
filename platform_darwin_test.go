@@ -983,3 +983,40 @@ func TestDarwinCustomPortListeners(t *testing.T) {
 		t.Fatal("unexpected fallback", response.StatusCode, response.Header)
 	}
 }
+
+func TestDarwinSetupRestartsFailedRegisteredJob(t *testing.T) {
+	for _, failStart := range []bool{false, true} {
+		t.Run(strconv.FormatBool(failStart), func(t *testing.T) {
+			p, service := darwinSetupFixture(t)
+			service.State = serviceState{State: "failed", Boot: "enabled"}
+			var out bytes.Buffer
+			if err := setupDarwin(p, setupOptions{Check: true}, &out, io.Discard, setupFixtureVerified); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out.String(), "Service action: one setup stop/start") || len(service.Actions) != 0 {
+				t.Fatal(out.String(), service.Actions)
+			}
+			if failStart {
+				service.failAction = "start"
+			}
+			err := setupDarwin(p, setupOptions{}, io.Discard, io.Discard, setupFixtureVerified)
+			if !failStart {
+				if err != nil || fmt.Sprint(service.Actions) != "[stop start]" || service.State.State != "active" || service.State.Boot != "enabled" {
+					t.Fatal(err, service.Actions, service.State)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "backup.json") || fmt.Sprint(service.Actions) != "[stop start start kill]" {
+				t.Fatal(err, service.Actions)
+			}
+			if service.State.State != "inactive" || service.State.Boot != "enabled" {
+				t.Fatal("rollback lost registered non-running state", service.State)
+			}
+			for _, path := range []string{p.installed.Config, p.config, p.generatedPath(), p.installed.Globals, p.file("setup.json")} {
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("rollback left %s: %v", path, err)
+				}
+			}
+		})
+	}
+}

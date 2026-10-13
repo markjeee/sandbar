@@ -131,8 +131,8 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 	fmt.Fprintln(out, "Admin socket:", p.file("admin.sock"))
 	fmt.Fprintln(out, "Login startup:", prior.Boot, "→ register and start the Homebrew user service")
 	fmt.Fprintln(out, "Backups:", p.file("backups"))
-	if prior.State == "active" {
-		fmt.Fprintln(out, "Service action: one setup stop/start to load the private admin endpoint")
+	if prior.State == "active" || prior.State == "failed" {
+		fmt.Fprintln(out, "Service action: one setup stop/start to replace the active or failed job")
 	}
 	if composition.StockReplaced {
 		fmt.Fprintln(out, "Stock welcome site: offer backup and replacement with --replace-default-site")
@@ -234,7 +234,7 @@ func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, compo
 		}
 	}
 	serviceChanged = true
-	if prior.State == "active" {
+	if prior.State == "active" || prior.State == "failed" {
 		if err := i.Service.Control("stop", out, errOut); err != nil {
 			return err
 		}
