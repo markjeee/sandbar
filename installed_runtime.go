@@ -64,7 +64,7 @@ func installedCandidate(p paths, routeBytes []byte, c config, out, errOut io.Wri
 	if err := checkAcceptedInputs(p); err != nil {
 		return nil, err
 	}
-	return adapted, nil
+	return installedSocketRuntime(p, adapted, c)
 }
 func checkAcceptedInputs(p paths) error {
 	if p.installed == nil {
@@ -89,7 +89,15 @@ func committedAdaptedConfig(p paths, errOut io.Writer) ([]byte, error) {
 	if err := checkAcceptedInputs(p); err != nil {
 		return nil, err
 	}
-	return adaptCaddyfile(p, p.installed.Config, errOut)
+	data, err := adaptCaddyfile(p, p.installed.Config, errOut)
+	if err != nil {
+		return nil, err
+	}
+	c, err := readConfig(p.config)
+	if err != nil {
+		return nil, err
+	}
+	return installedSocketRuntime(p, data, c)
 }
 
 func selectedActiveConfig(p paths) ([]byte, error) {

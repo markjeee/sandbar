@@ -27,6 +27,9 @@ func status(p paths, out, errOut io.Writer) error {
 		service, err = p.installed.Service.Inspect()
 		fmt.Fprintln(out, "Service:", service.State)
 		fmt.Fprintln(out, startupLabel+":", service.Boot)
+		if service.Sockets != "" {
+			fmt.Fprintln(out, "Sockets:", service.Sockets)
+		}
 		if err != nil {
 			failures = append(failures, err)
 		}

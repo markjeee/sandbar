@@ -7,7 +7,7 @@ Sandbar exits after each command. The selected Caddy service keeps running.
 
 ## Install
 
-Use Linux amd64 with apt Caddy and systemd, or macOS arm64 with the current user's Homebrew Caddy service.
+Use Linux amd64 with apt Caddy and systemd, or macOS arm64 with Homebrew Caddy and a Sandbar-managed user LaunchAgent.
 Install [Caddy](https://caddyserver.com/docs/install) v2.11.7 or a later v2 release separately.
 Linux setup also needs Polkit and sudo. Ubuntu 24.04 is the Linux acceptance target.
 
@@ -18,7 +18,7 @@ curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/i
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-For macOS, build the unreleased checkout with Go 1.27.2 or later:
+For macOS, build the unreleased checkout with Go 1.27.2 or later and Xcode Command Line Tools:
 
 ```sh
 sh ./install.sh
@@ -32,15 +32,15 @@ See [installation and upgrades](docs/install.md) for prerequisites, permissions,
 
 ## Set up Caddy
 
-On macOS, preview and apply setup as your normal user with explicit high ports:
+On macOS, preview and apply setup as your normal user:
 
 ```sh
-sandbar setup --check --http-port 8080 --https-port 8443
-sandbar setup --http-port 8080 --https-port 8443
+sandbar setup --check --http-port 80 --https-port 443
+sandbar setup --http-port 80 --https-port 443
 ```
 
-Fresh defaults remain 80/443. Use high ports when the macOS user service cannot bind privileged ports.
-Setup saves these ports for later commands and repeated setup.
+Setup transfers a verified Homebrew user job to Sandbar. Homebrew still supplies the Caddy package.
+Launchd opens loopback TCP/UDP sockets. Caddy runs as your user. Omitted port options retain saved ports.
 
 On Linux, use an administrator once:
 
@@ -54,7 +54,7 @@ Linux setup grants access to **all Caddy routes and files Caddy can read**. Revi
 **After Linux setup, log out and back in. A new terminal pane does not refresh group membership.**
 macOS setup starts the user service and registers login startup. It does not provide service before login.
 
-Request trust as your normal user, then check `https://sandbar.localhost:8443` on macOS or `https://sandbar.localhost` on Linux:
+For a new CA, request trust as your normal user. Migration keeps existing trust. Check `https://sandbar.localhost`:
 
 ```sh
 sandbar trust
@@ -71,8 +71,8 @@ sandbar add app.sandbar.localhost 8000
 sandbar status
 ```
 
-Open `https://app.sandbar.localhost:8443` on macOS or `https://app.sandbar.localhost` on Linux.
-These examples use macOS ports 8080/8443 and Linux ports 80/443. Backends must use other ports. HTTP redirects to HTTPS.
+Open `https://app.sandbar.localhost`. These examples select ports 80/443. Backends must use other ports.
+Custom macOS ports remain supported. HTTP redirects to the selected HTTPS port.
 Changes apply without restarting Caddy. When stopped, they are saved for its next start.
 
 | Command | Result |

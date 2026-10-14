@@ -1,6 +1,6 @@
 # Sandbar user reference
 
-These commands describe apt/systemd on Linux and unreleased Homebrew user-service support on macOS arm64.
+These commands describe apt/systemd on Linux and unreleased Homebrew Caddy with a Sandbar-managed user LaunchAgent on macOS arm64.
 Beta.1 uses a private user router. See [installation and migration](install.md) before upgrading.
 
 ## App names and addresses
@@ -40,11 +40,17 @@ On macOS, setup and ordinary commands run as the current user.
 `stop` affects every Caddy route, including unrelated sites.
 Linux stop preserves boot startup. macOS stop removes login registration, and start registers it again.
 The macOS user service does not provide boot-before-login operation.
+Homebrew supplies the Caddy package. Use Sandbar to control its service after setup.
+The `local.sandbar.caddy` job owns HTTP TCP and HTTPS TCP/UDP loopback sockets.
+Stop unloads this job and releases its sockets. Requests cannot restart it after a successful stop.
+Start uses the retained private template to restore the login copy. Reload retains the job and Caddy PID.
 
 ## Read status results
 
 `status` reports service state, startup registration, and access to Caddy's private control socket.
 Startup means boot enablement on Linux and login registration on macOS.
+macOS reports Caddy process state, registration, and launchd socket ownership separately.
+Open sockets alone do not establish working routing because launchd can own them while Caddy has failed.
 Development status checks the selected private router.
 It reports pending source edits, differences from active configuration, and pending recovery.
 
@@ -94,7 +100,8 @@ macOS setup can select other installed ports with `--http-port` and `--https-por
 For example, `sandbar setup --http-port 8080 --https-port 8443` saves those ports for future commands.
 Repeated setup without port options retains saved ports. An omitted option uses its fresh default only when no value exists.
 These settings affect Caddy's shared HTTP/HTTPS ports. Setup rejects conflicting existing explicit settings.
-Use setup to change installed macOS ports, and use `init` port options only with an explicit development home.
+Migration to the Sandbar job retains saved ports unless explicit setup flags change them.
+The socket plan is saved during setup. Use setup to change installed macOS ports, and use `init` port options only with an explicit development home.
 With HTTP 8080 and HTTPS 8443, visit `http://app.sandbar.localhost:8080` or `https://app.sandbar.localhost:8443`.
 App backends must use other ports.
 An empty `routes` list is valid. The built-in welcome site is outside this list and `sandbar ls`.
@@ -113,6 +120,10 @@ Read [supported Caddy configurations](install.md#supported-caddy-configurations)
 One installed lock serializes route changes. Private homes have separate locks.
 Linux shared files may belong to their last writer while retaining the `sandbar` group and required access modes.
 macOS state belongs only to the current user.
+The private restart template is `state/launchd/caddy.plist` under the installed home.
+The registered login copy is `~/Library/LaunchAgents/local.sandbar.caddy.plist`.
+Both job definitions and saved identity must agree before installed mutations.
+The original Homebrew job must remain disabled after migration. Competing ownership blocks changes.
 Caddy keeps installed CA keys in its service storage, preserving unrelated CAs.
 Linux exports its public root to `/var/lib/sandbar/root.crt`.
 macOS reads the original at `<verified Caddy storage>/pki/authorities/sandbar/root.crt`, without a state copy or symlink.

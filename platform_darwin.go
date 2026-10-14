@@ -83,10 +83,14 @@ func inspectInstallation() (*installation, error) {
 	}
 	service := &homebrewService{brew: brew, installation: i}
 	i.Service = service
-	if _, err := service.Inspect(); err != nil {
+	selected, err := recordedDarwinInstallation(i, brew)
+	if err != nil {
 		return nil, err
 	}
-	return i, nil
+	if _, err := selected.Service.Inspect(); err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 func homebrewInstallation(prefix string, data []byte, account *user.User) (*installation, error) {
 	var document struct {

@@ -18,8 +18,9 @@ import (
 )
 
 type setupRecord struct {
-	Identity string        `json:"identity"`
-	Manifest inputManifest `json:"manifest"`
+	Identity   string        `json:"identity"`
+	Manifest   inputManifest `json:"manifest"`
+	SocketPlan *socketPlan   `json:"socket_plan,omitempty"`
 }
 
 func readSetupRecord(p paths) (setupRecord, error) {
@@ -44,12 +45,14 @@ type setupBackup struct {
 	Published []byte `json:"published"`
 }
 type setupUndo struct {
-	Files         []setupBackup
-	Directories   []setupDirectoryBackup
-	Expected      []setupSnapshot `json:"-"`
-	Dir           string
-	Prior         serviceState
-	LegacyRestart string
+	Files             []setupBackup
+	Directories       []setupDirectoryBackup
+	Expected          []setupSnapshot `json:"-"`
+	Dir               string
+	Prior             serviceState
+	LegacyRestart     string
+	PriorInstallation string       `json:"prior_installation,omitempty"`
+	PriorJob          *setupBackup `json:"prior_job,omitempty"`
 }
 
 func (u *setupUndo) save() error {

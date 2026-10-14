@@ -51,7 +51,15 @@ trap 'exit 1' HUP INT TERM
 
 if [ -n "$source_dir" ]; then
     command -v go >/dev/null 2>&1 || { echo 'Checkout installation requires Go. See go.mod for the version.' >&2; exit 1; }
-    CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go -C "$source_dir" build -trimpath -o "$work_dir/sandbar" .
+    cgo_enabled=0
+    if [ "$target_os" = darwin ]; then
+        command -v xcrun >/dev/null 2>&1 || { echo 'macOS source builds require Xcode Command Line Tools. Run xcode-select --install.' >&2; exit 1; }
+        CC=$(xcrun --find clang) && [ -x "$CC" ] || { echo 'macOS source builds require SDK clang. Run xcode-select --install.' >&2; exit 1; }
+        SDKROOT=$(xcrun --sdk macosx --show-sdk-path) && [ -d "$SDKROOT" ] || { echo 'macOS source builds require the macOS SDK. Run xcode-select --install.' >&2; exit 1; }
+        export CC SDKROOT
+        cgo_enabled=1
+    fi
+    CGO_ENABLED="$cgo_enabled" GOOS="$target_os" GOARCH="$target_arch" go -C "$source_dir" build -trimpath -o "$work_dir/sandbar" .
 else
     archive="sandbar_${version}_${target_os}_${target_arch}.tar.gz"
     base_url="https://github.com/markjeee/sandbar/releases/download/$version"

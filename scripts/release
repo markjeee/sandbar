@@ -32,13 +32,22 @@ case "$#" in
     1) output_dir=$1 ;;
     *) echo 'Usage: scripts/release [--version <unreleased-version>] [output-directory]' >&2; exit 1 ;;
 esac
+cgo_enabled=0
+if [ "$target_os" = darwin ]; then
+    command -v xcrun >/dev/null 2>&1 || { echo 'macOS source builds require Xcode Command Line Tools. Run xcode-select --install.' >&2; exit 1; }
+    CC=$(xcrun --find clang) && [ -x "$CC" ] || { echo 'macOS source builds require SDK clang. Run xcode-select --install.' >&2; exit 1; }
+    SDKROOT=$(xcrun --sdk macosx --show-sdk-path) && [ -d "$SDKROOT" ] || { echo 'macOS source builds require the macOS SDK. Run xcode-select --install.' >&2; exit 1; }
+    export CC SDKROOT
+    cgo_enabled=1
+fi
+
 mkdir -p "$output_dir"
 output_dir=$(CDPATH='' cd -P "$output_dir" && pwd)
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 trap 'exit 1' HUP INT TERM
 
-CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go -C "$project_dir" build -trimpath \
+CGO_ENABLED="$cgo_enabled" GOOS="$target_os" GOARCH="$target_arch" go -C "$project_dir" build -trimpath \
     -ldflags "-s -w -X main.version=$version" -o "$work_dir/sandbar" .
 cp "$project_dir/LICENSE" "$work_dir/LICENSE"
 # Candidate installers select the candidate assets, never the published beta.2.

@@ -135,15 +135,17 @@ Do not remove the installed CA automatically after a successful browser check.
 
 ## macOS browser acceptance
 
-Run this checklist after requested macOS setup with `--http-port 8080 --https-port 8443` and explicit trust setup.
+Run this checklist after requested macOS setup with `--http-port 80 --https-port 443`.
+Keep existing trust during service migration. Request trust setup separately for a new CA.
+For custom ports, substitute the saved ports in every URL below.
 Quit Chrome fully and confirm its process exits before each trust transition. A new window or profile is insufficient.
 Record Chrome and macOS versions, the root fingerprint, and each result as pending or verified.
 
 1. Run a generic backend and configure `app.sandbar.localhost` and `api.app.sandbar.localhost` to its port.
-2. Open `http://app.sandbar.localhost:8080/check.html?phase=trusted` with normal hostname resolution.
-3. Confirm HTTP 308 followed by verified HTTPS at `https://app.sandbar.localhost:8443/check.html?phase=trusted`, the expected backend content, and unchanged path and query.
-4. Repeat for `http://api.app.sandbar.localhost:8080/check.html?phase=trusted`. Confirm the nested name resolves and verifies.
-5. Open `https://sandbar.localhost:8443` and confirm the built-in welcome page remains available.
+2. Open `http://app.sandbar.localhost/check.html?phase=trusted` with normal hostname resolution.
+3. Confirm HTTP 308 followed by verified HTTPS at `https://app.sandbar.localhost/check.html?phase=trusted`, the expected backend content, and unchanged path and query.
+4. Repeat for `http://api.app.sandbar.localhost/check.html?phase=trusted`. Confirm the nested name resolves and verifies.
+5. Open `https://sandbar.localhost` and confirm the built-in welcome page remains available.
 6. Only after a separate removal request, remove the exact root and any recorded manual imports, then repeat with a fresh Chrome process.
 7. Confirm certificate rejection while the backend and Caddy remain reachable. A connection failure does not prove removal.
 

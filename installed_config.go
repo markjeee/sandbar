@@ -459,6 +459,14 @@ func checkInstalledAdapted(data []byte, c config, admin string) error {
 	if err := c.validate(); err != nil {
 		return err
 	}
+	hosts := map[string]bool{"sandbar.localhost": true}
+	for _, r := range c.Routes {
+		hosts[r.Hostname] = true
+	}
+	return checkInstalledAdaptedHosts(data, c, admin, hosts)
+}
+
+func checkInstalledAdaptedHosts(data []byte, c config, admin string, hosts map[string]bool) error {
 	var doc struct {
 		Admin struct {
 			Listen   string `json:"listen"`
@@ -518,10 +526,6 @@ func checkInstalledAdapted(data []byte, c config, admin string) error {
 	ca, ok := doc.Apps.PKI.CAs["sandbar"]
 	if !ok || ca.Name != "sandbar local CA" {
 		return errors.New("the Caddy CA sandbar conflicts with Sandbar's dedicated CA")
-	}
-	hosts := map[string]bool{"sandbar.localhost": true}
-	for _, r := range c.Routes {
-		hosts[r.Hostname] = true
 	}
 	hostCounts := map[string]int{}
 	for name, server := range doc.Apps.HTTP.Servers {
