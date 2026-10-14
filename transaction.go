@@ -203,17 +203,40 @@ func createBackup(path string, data []byte) error {
 	return syncDir(filepath.Dir(path))
 }
 
-func checkMigrationBackup(p paths, tx transaction) error {
+func migrationBackups(p paths, tx transaction) ([]setupSnapshot, error) {
 	if !tx.Migration {
-		return nil
+		return nil, nil
 	}
-	backup := filepath.Join(filepath.Dir(p.config), "config.v1.backup.json")
-	existing, err := readOptional(backup)
+	var previous, candidate struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(tx.PreviousSource, &previous); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(tx.CandidateSource, &candidate); err != nil {
+		return nil, err
+	}
+	prefix := filepath.Join(filepath.Dir(p.config), fmt.Sprintf("config.v%d.backup", previous.Version))
+	backups := []setupSnapshot{{Path: prefix + ".json", Data: tx.PreviousSource}}
+	if candidate.Version == 3 && tx.PreviousGenerated != nil {
+		backups = append(backups, setupSnapshot{Path: prefix + ".Caddyfile", Data: tx.PreviousGenerated})
+	}
+	return backups, nil
+}
+
+func checkMigrationBackup(p paths, tx transaction) error {
+	backups, err := migrationBackups(p, tx)
 	if err != nil {
 		return err
 	}
-	if existing != nil && !bytes.Equal(existing, tx.PreviousSource) {
-		return fmt.Errorf("legacy backup conflict at %s; recovery files: %s", backup, p.file("transaction"))
+	for _, backup := range backups {
+		existing, err := readOptional(backup.Path)
+		if err != nil {
+			return err
+		}
+		if existing != nil && !bytes.Equal(existing, backup.Data) {
+			return fmt.Errorf("legacy backup conflict at %s; recovery files: %s", backup.Path, p.file("transaction"))
+		}
 	}
 	return nil
 }
@@ -228,17 +251,17 @@ func finishTransaction(p paths, tx transaction, candidate bool) error {
 			return err
 		}
 		source, generated = tx.CandidateSource, tx.CandidateGenerated
-		if tx.Migration {
-			backup := filepath.Join(filepath.Dir(p.config), "config.v1.backup.json")
-			existing, err := readOptional(backup)
+		backups, err := migrationBackups(p, tx)
+		if err != nil {
+			return err
+		}
+		for _, backup := range backups {
+			existing, err := readOptional(backup.Path)
 			if err != nil {
 				return err
 			}
-			if existing != nil && !bytes.Equal(existing, tx.PreviousSource) {
-				return fmt.Errorf("legacy backup conflict at %s; recovery files: %s", backup, p.file("transaction"))
-			}
 			if existing == nil {
-				if err := createBackup(backup, tx.PreviousSource); err != nil {
+				if err := createBackup(backup.Path, backup.Data); err != nil {
 					return err
 				}
 			}

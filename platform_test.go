@@ -320,7 +320,7 @@ func TestInstalledInitCreatesSharedSource(t *testing.T) {
 	if err := os.Remove(p.config); err != nil {
 		t.Fatal(err)
 	}
-	if err := initialize(p, nil, io.Discard, io.Discard); err != nil {
+	if err := initialize(p, []string{"--machine", "fixture"}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	meta, err := readFileMetadata(p.config)

@@ -134,20 +134,21 @@ func renderCaddyfile(c config, p paths, ipv6 bool) (string, error) {
 			name "sandbar local CA"
 		}
 	}
-}
+%s}
 
-`, strconv.Quote(address), strconv.Quote(p.file("caddy")), c.HTTPPort, c.HTTPSPort, bind)
-	for _, r := range c.Routes {
-		fmt.Fprintf(&content, `https://%s:%d {
-	tls internal
-	reverse_proxy %s
-}
-
-http://%s:%d {
-	redir %s{uri} 308
-}
-
-`, r.Hostname, c.HTTPSPort, r.Upstream, r.Hostname, c.HTTPPort, c.routeURL(r.Hostname))
+`, strconv.Quote(address), strconv.Quote(p.file("caddy")), c.HTTPPort, c.HTTPSPort, bind, renderTeleportGlobals(c))
+	for _, r := range c.localSites(false) {
+		fmt.Fprintf(&content, "https://%s:%d {\n\ttls internal\n", r.Hostname, c.HTTPSPort)
+		if r.Upstream == "" {
+			fmt.Fprintf(&content, "\theader Content-Type \"text/html; charset=utf-8\"\n\trespond %s 200\n", strconv.Quote(welcomeHTML))
+		} else {
+			fmt.Fprintf(&content, "\treverse_proxy %s {\n\t\theader_up Host {hostport}\n\t}\n", r.Upstream)
+		}
+		fmt.Fprintf(&content, "}\n\nhttp://%s:%d {\n\tredir %s{uri} 308\n}\n\n", r.Hostname, c.HTTPPort, c.routeURL(r.Hostname))
+	}
+	content.WriteString(renderTeleportHTTPSRoutes(c, bind, "local"))
+	if c.Version == 3 {
+		fmt.Fprintf(&content, "http://:%d {\n\tbind %s\n%s\trespond 404\n}\n", c.HTTPPort, bind, renderTeleportHTTPHandlers(c))
 	}
 	return strings.TrimRight(content.String(), "\n") + "\n", nil
 }

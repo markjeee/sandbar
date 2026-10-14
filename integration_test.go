@@ -119,7 +119,7 @@ func initRouter(t *testing.T, bin string, upstream int) (paths, config) {
 	t.Helper()
 	home := shortHome(t)
 	httpPort, httpsPort := freePorts(t)
-	code, output := runBinary(t, bin, home, "init", "--http-port", strconv.Itoa(httpPort), "--https-port", strconv.Itoa(httpsPort), "netbox.sandbar.localhost", strconv.Itoa(upstream))
+	code, output := runBinary(t, bin, home, "init", "--machine", "fixture", "--http-port", strconv.Itoa(httpPort), "--https-port", strconv.Itoa(httpsPort), "netbox.sandbar.localhost", strconv.Itoa(upstream))
 	if code != 0 {
 		t.Fatalf("init %d: %s", code, output)
 	}
@@ -590,7 +590,7 @@ func TestIntegrationRouteManagement(t *testing.T) {
 	// Empty initialization and startup must also retain the admin endpoint and CA.
 	empty := shortHome(t)
 	httpPort, httpsPort := freePorts(t)
-	if code, output := runBinary(t, bin, empty, "init", "--http-port", strconv.Itoa(httpPort), "--https-port", strconv.Itoa(httpsPort)); code != 0 {
+	if code, output := runBinary(t, bin, empty, "init", "--machine", "fixture", "--http-port", strconv.Itoa(httpPort), "--https-port", strconv.Itoa(httpsPort)); code != 0 {
 		t.Fatalf("empty init: %d %s", code, output)
 	}
 	emptyPaths := testPaths(t, empty)

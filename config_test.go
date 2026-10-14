@@ -96,13 +96,13 @@ func TestReadConfig(t *testing.T) {
 
 func TestInit(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
-	args := []string{"--home", home, "init", "NETBOX.sandbar.localhost", "8000"}
+	args := []string{"--home", home, "init", "--machine", "fixture", "NETBOX.sandbar.localhost", "8000"}
 	if code, out, errOut := cli(t, args...); code != 0 || !strings.Contains(out, filepath.Join(home, "config.json")) {
 		t.Fatalf("%d %s %s", code, out, errOut)
 	}
 	p := testPaths(t, home)
 	c, err := readConfig(p.config)
-	if err != nil || !reflect.DeepEqual(c.Routes, []route{{"netbox.sandbar.localhost", "http://127.0.0.1:8000"}}) || c.Version != 2 {
+	if err != nil || !reflect.DeepEqual(c.Routes, []route{{"netbox.sandbar.localhost", "http://127.0.0.1:8000"}}) || c.Version != 3 {
 		t.Fatalf("%+v %v", c, err)
 	}
 	before, err := os.Stat(p.config)
@@ -156,7 +156,7 @@ func TestInit(t *testing.T) {
 
 func TestInitOverridesAndInvalidArguments(t *testing.T) {
 	home := t.TempDir()
-	if code, _, errOut := cli(t, "--home", home, "init", "--http-port", "8080", "--https-port", "8443", "netbox.sandbar.localhost", "8000"); code != 0 {
+	if code, _, errOut := cli(t, "--home", home, "init", "--machine", "fixture", "--http-port", "8080", "--https-port", "8443", "netbox.sandbar.localhost", "8000"); code != 0 {
 		t.Fatal(errOut)
 	}
 	p := testPaths(t, home)
@@ -168,9 +168,9 @@ func TestInitOverridesAndInvalidArguments(t *testing.T) {
 		t.Fatal(c)
 	}
 	for _, args := range [][]string{
-		{"init", "one"}, {"init", "netbox.sandbar.localhost", "abc"}, {"init", "bad", "8000"},
-		{"init", "--http-port", "8000", "netbox.sandbar.localhost", "8000"},
-		{"init", "netbox.sandbar.localhost", "8000", "--http-port", "8080"},
+		{"init", "--machine", "fixture", "one"}, {"init", "--machine", "fixture", "netbox.sandbar.localhost", "abc"}, {"init", "--machine", "fixture", "bad", "8000"},
+		{"init", "--machine", "fixture", "--http-port", "8000", "netbox.sandbar.localhost", "8000"},
+		{"init", "--machine", "fixture", "netbox.sandbar.localhost", "8000", "--http-port", "8080"},
 		{"start", "extra"}, {"stop", "extra"}, {"unknown"},
 	} {
 		home := filepath.Join(t.TempDir(), "absent")
@@ -193,7 +193,7 @@ func TestPaths(t *testing.T) {
 	envHome := filepath.Join(base, "env")
 	flagHome := filepath.Join(base, "flag")
 	t.Setenv("SANDBAR_HOME", envHome)
-	for _, args := range [][]string{{"init", "netbox.sandbar.localhost", "8000"}, {"--home", flagHome, "init", "netbox.sandbar.localhost", "8000"}} {
+	for _, args := range [][]string{{"init", "--machine", "fixture", "netbox.sandbar.localhost", "8000"}, {"--home", flagHome, "init", "--machine", "fixture", "netbox.sandbar.localhost", "8000"}} {
 		if code, _, errOut := cli(t, args...); code != 0 {
 			t.Fatal(errOut)
 		}
@@ -247,6 +247,7 @@ func FuzzConfig(f *testing.F) {
 	for _, input := range []string{
 		`{"version":1,"hostname":"NETBOX.sandbar.localhost","upstream_port":8000,"http_port":80,"https_port":443}`,
 		`{"version":1,"hostname":"a.b.sandbar.localhost","upstream_port":8000,"http_port":8080,"https_port":8443}`,
+		`{"version":3,"machine":"test","http_port":18080,"https_port":18443,"routes":[],"teleports":[]}`,
 		`null`, `{}`, `{`, `{"version":2}`, `{"extra":true}`, `[]`,
 	} {
 		f.Add([]byte(input))

@@ -58,7 +58,8 @@ sandbar --home /tmp/sandbar-demo stop
 Explicit homes can use relative paths. Keep paths short enough for the platform Unix socket limit. Darwin has a smaller limit than Linux.
 Paths cannot contain control characters, braces, or vertical bars because Caddy treats these as syntax.
 Directories have mode `0700`. Private regular files have mode `0600`.
-Development routers do not serve the installed welcome page.
+Development routers do not serve the installed `sandbar.localhost` welcome page.
+Version 3 homes serve their own `sandbar-<machine>.localhost` welcome page.
 `--home` selects a CA and does not isolate user or system trust stores.
 
 ## Build
@@ -149,6 +150,142 @@ Expect HTTP 308, then verified HTTPS 200 and `sandbar backend`.
 Caddy can finish starting before its first certificate is ready. The curl retries cover that brief interval.
 Private development startup does not poll readiness or retry Caddy commands.
 The disposable home remains available for inspection after the proof.
+
+## Two-machine Teleport proof
+
+Use mark-pro4 as the macOS arm64 client and mark-work-rise as the Linux amd64 peer.
+Both checkouts must contain the same revision and a Teleport-capable build.
+Install native Go, Caddy, and Python 3 on each machine first.
+The remote installed binary path is `/home/markj/.local/bin/sandbar`; installed acceptance requires an authorized Teleport-capable upgrade.
+This private proof uses each checkout's own native binary instead.
+
+Use the private `.sandbox/teleport` child home on each machine.
+This leaves the persistent manual `.sandbox/config.json` and installed service state intact.
+HTTP 18080, HTTPS 18443, and remote backend 18000 must be free.
+Stop an existing manual sandbox explicitly before reusing its ports.
+Keep checkout paths short enough for the private admin socket. On macOS the socket path must be at most 103 bytes.
+Use an unused proof home, or continue the same proof without changing its saved machine identity.
+The proof changes no personal trust stores and does not run `trust` or `setup`.
+
+Run in a terminal on **mark-work-rise**, inside its Sandbar checkout:
+
+```sh
+proof_home="$PWD/.sandbox/teleport"
+proof_bin="$proof_home/sandbar"
+mkdir -p "$proof_home"
+CGO_ENABLED=0 go build -o "$proof_bin" .
+python3 -u - <<'PYBACKEND' > "$proof_home/backend.log" 2>&1 &
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+class Echo(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({"host": self.headers.get("Host"),
+                           "forwarded_host": self.headers.get("X-Forwarded-Host"),
+                           "scheme": self.headers.get("X-Forwarded-Proto"),
+                           "uri": self.path}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+HTTPServer(("127.0.0.1", 18000), Echo).serve_forever()
+PYBACKEND
+proof_backend_pid=$!
+"$proof_bin" --home "$proof_home" init --machine mark-work-rise --http-port 18080 --https-port 18443
+"$proof_bin" --home "$proof_home" add teleport.sandbar.localhost 18000
+"$proof_bin" --home "$proof_home" add api.teleport.sandbar.localhost 18000
+"$proof_bin" --home "$proof_home" start
+"$proof_bin" --home "$proof_home" teleport info --json
+sha256sum "$proof_home/state/caddy/pki/authorities/local/root.crt"
+ss -lntp '( sport = :18080 or sport = :18443 )'
+```
+
+Keep that terminal open for its backend PID and cleanup.
+Record the absolute `proof_home` and `proof_bin` values for registration from the client.
+Check direct access on **mark-work-rise**, using its own public root:
+
+```sh
+for host in teleport.sandbar-mark-work-rise.localhost api.teleport.sandbar-mark-work-rise.localhost; do
+  curl --noproxy '*' --fail --retry 5 --retry-delay 1 --retry-all-errors \
+    --resolve "$host:18443:127.0.0.1" \
+    --cacert "$proof_home/state/caddy/pki/authorities/local/root.crt" \
+    "https://$host:18443/path?q=1"
+done
+```
+
+Each JSON response must preserve the exact hostname, port `18443`, `/path?q=1`, and HTTPS scheme.
+Run in a terminal on **mark-pro4**, inside its Sandbar checkout:
+
+```sh
+proof_home="$PWD/.sandbox/teleport"
+proof_bin="$proof_home/sandbar"
+mkdir -p "$proof_home"
+CGO_ENABLED=1 CC="$(xcrun --find clang)" SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" go build -o "$proof_bin" .
+"$proof_bin" --home "$proof_home" init --machine mark-pro4 --http-port 18080 --https-port 18443
+"$proof_bin" --home "$proof_home" start
+shasum -a 256 "$proof_home/state/caddy/pki/authorities/local/root.crt"
+ssh-add -l
+```
+
+Set these values on **mark-pro4** to the absolute remote paths recorded above:
+
+```sh
+remote_proof_home=/absolute/remote/checkout/.sandbox/teleport
+remote_proof_bin="$remote_proof_home/sandbar"
+"$proof_bin" --home "$proof_home" teleport register \
+  --remote-bin "$remote_proof_bin" --remote-home "$remote_proof_home" mark-work-rise
+"$proof_bin" --home "$proof_home" teleport ls
+/usr/sbin/lsof -nP -iTCP:18080 -iTCP:18443 -sTCP:LISTEN
+for host in teleport.sandbar-mark-work-rise.localhost api.teleport.sandbar-mark-work-rise.localhost; do
+  curl --noproxy '*' --fail --retry 5 --retry-delay 1 --retry-all-errors \
+    --resolve "$host:18443:127.0.0.1" \
+    --cacert "$proof_home/state/caddy/pki/authorities/local/root.crt" \
+    "https://$host:18443/path?q=1"
+done
+```
+
+Confirm the same complete app URLs and echoed Host values through both paths.
+Registration obtains the peer root over verified SSH, then calls connect.
+Only the client root verifies browser-facing TLS on mark-pro4.
+Do not import the remote root into browser or system trust.
+
+On **mark-pro4**, exercise connection lifetime and keep registration after disconnect:
+
+```sh
+"$proof_bin" --home "$proof_home" teleport disconnect mark-work-rise
+curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}\n' \
+  --resolve teleport.sandbar-mark-work-rise.localhost:18443:127.0.0.1 \
+  --cacert "$proof_home/state/caddy/pki/authorities/local/root.crt" \
+  'https://teleport.sandbar-mark-work-rise.localhost:18443/path?q=1'
+"$proof_bin" --home "$proof_home" teleport connect mark-work-rise
+"$proof_bin" --home "$proof_home" teleport ls
+```
+
+Expect ordinary HTTP 502 while disconnected. Repeat the verified requests after reconnect.
+Add another remote canonical app on mark-work-rise and confirm its alias works without re-registering on mark-pro4.
+Record source and CA hashes before and after registration. Registration must not change remote configuration, CA, or trust.
+
+Cleanup on **mark-pro4**:
+
+```sh
+"$proof_bin" --home "$proof_home" teleport rm mark-work-rise
+"$proof_bin" --home "$proof_home" stop
+shasum -a 256 "$proof_home/state/caddy/pki/authorities/local/root.crt"
+```
+
+Cleanup in the original **mark-work-rise** terminal:
+
+```sh
+"$proof_bin" --home "$proof_home" stop
+kill "$proof_backend_pid"
+wait "$proof_backend_pid" || true
+sha256sum "$proof_home/state/caddy/pki/authorities/local/root.crt"
+```
+
+Keep proof-owned files for inspection, or remove only each checkout's `.sandbox/teleport` child afterward.
+Do not remove the parent `.sandbox`, stop installed Caddy, or remove trust as proof cleanup.
+Installed acceptance is separate. After authorized upgrades and app setup, use the same machine-qualified URL on HTTPS 443 without a port.
+For the installed remote metadata prerequisite, use `/home/markj/.local/bin/sandbar teleport info --json` through verified SSH.
 
 ## Checks
 

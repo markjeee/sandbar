@@ -226,7 +226,7 @@ func setupFixtureVerified(p paths, c config) error {
 func TestDarwinSetupPreviewFreshRepeatAndRollback(t *testing.T) {
 	p, service := darwinSetupFixture(t)
 	var out, diagnostic bytes.Buffer
-	if err := setupDarwin(p, setupOptions{Check: true}, &out, &diagnostic, setupFixtureVerified); err != nil {
+	if err := setupDarwin(p, setupOptions{Machine: "fixture", Check: true}, &out, &diagnostic, setupFixtureVerified); err != nil {
 		t.Fatal(err, diagnostic.String())
 	}
 	if !strings.Contains(out.String(), "Create missing Caddyfile:") || !strings.Contains(out.String(), "Login startup:") {
@@ -241,7 +241,7 @@ func TestDarwinSetupPreviewFreshRepeatAndRollback(t *testing.T) {
 		t.Fatal("preview mutated service")
 	}
 	apply := func() error { return setupDarwin(p, setupOptions{}, &out, &diagnostic, setupFixtureVerified) }
-	if err := apply(); err != nil {
+	if err := setupDarwin(p, setupOptions{Machine: "fixture"}, &out, &diagnostic, setupFixtureVerified); err != nil {
 		t.Fatal(err, diagnostic.String())
 	}
 	if fmt.Sprint(service.Actions) != "[start]" || service.validations != 1 {
@@ -345,7 +345,7 @@ func TestDarwinSetupExistingConfigAndRejectedCandidates(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out, diagnostic bytes.Buffer
-			err := setupDarwin(p, setupOptions{}, &out, &diagnostic, setupFixtureVerified)
+			err := setupDarwin(p, setupOptions{Machine: "fixture"}, &out, &diagnostic, setupFixtureVerified)
 			if test.wantError {
 				if err == nil {
 					t.Fatal("accepted conflict")
@@ -488,7 +488,7 @@ func TestHomebrewExistingJobCompatibility(t *testing.T) {
 func TestDarwinStartRegistersActiveUnregisteredService(t *testing.T) {
 	p, service := darwinSetupFixture(t)
 	var diagnostic bytes.Buffer
-	if err := setupDarwin(p, setupOptions{}, io.Discard, &diagnostic, setupFixtureVerified); err != nil {
+	if err := setupDarwin(p, setupOptions{Machine: "fixture"}, io.Discard, &diagnostic, setupFixtureVerified); err != nil {
 		t.Fatal(err, diagnostic.String())
 	}
 	adapted, err := adaptCaddyfile(p, p.installed.Config, &diagnostic)
@@ -514,7 +514,7 @@ func TestDarwinInstalledRouteChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	var diagnostic bytes.Buffer
-	if err := setupDarwin(p, setupOptions{}, io.Discard, &diagnostic, setupFixtureVerified); err != nil {
+	if err := setupDarwin(p, setupOptions{Machine: "fixture"}, io.Discard, &diagnostic, setupFixtureVerified); err != nil {
 		t.Fatal(err, diagnostic.String())
 	}
 	service.State = serviceState{State: "inactive", Boot: "disabled"}
@@ -739,7 +739,7 @@ func TestDarwinInstalledStartupRejectsRealTLSAndHTTPFailures(t *testing.T) {
 func TestDarwinSetupVerificationFailureRollsBack(t *testing.T) {
 	p, service := darwinSetupFixture(t)
 	failed := errors.New("simulated startup verification failure")
-	err := setupDarwin(p, setupOptions{}, io.Discard, io.Discard, func(paths, config) error { return failed })
+	err := setupDarwin(p, setupOptions{Machine: "fixture"}, io.Discard, io.Discard, func(paths, config) error { return failed })
 	if !errors.Is(err, failed) || !strings.Contains(err.Error(), "backup.json") {
 		t.Fatal(err)
 	}
@@ -756,7 +756,7 @@ func TestDarwinSetupVerificationFailureRollsBack(t *testing.T) {
 func TestDarwinSetupCustomPorts(t *testing.T) {
 	p, service := darwinSetupFixture(t)
 	httpPort, httpsPort := 8080, 8443
-	options := setupOptions{HTTPPort: &httpPort, HTTPSPort: &httpsPort, Check: true}
+	options := setupOptions{Machine: "fixture", HTTPPort: &httpPort, HTTPSPort: &httpsPort, Check: true}
 	var out, diagnostic bytes.Buffer
 	verify := func(p paths, c config) error {
 		if c.HTTPPort != httpPort || c.HTTPSPort != httpsPort {
@@ -838,7 +838,7 @@ func TestDarwinSetupInvalidPortsPreserveFiles(t *testing.T) {
 			if err := os.WriteFile(p.installed.Config, top, 0600); err != nil {
 				t.Fatal(err)
 			}
-			options := setupOptions{HTTPPort: &test.http, HTTPSPort: &test.https}
+			options := setupOptions{Machine: "fixture", HTTPPort: &test.http, HTTPSPort: &test.https}
 			err = setupDarwin(p, options, io.Discard, io.Discard, setupFixtureVerified)
 			if err == nil {
 				t.Fatal("accepted invalid ports")
@@ -873,7 +873,7 @@ func TestDarwinSetupExistingGlobalPorts(t *testing.T) {
 				t.Fatal(err)
 			}
 			httpPort, httpsPort := 8080, 8443
-			options := setupOptions{HTTPPort: &httpPort, HTTPSPort: &httpsPort, Check: true}
+			options := setupOptions{Machine: "fixture", HTTPPort: &httpPort, HTTPSPort: &httpsPort, Check: true}
 			var diagnostic bytes.Buffer
 			verify := func(p paths, c config) error { _, err := selectedStatusRoots(p.rootCertificate()); return err }
 			err := setupDarwin(p, options, io.Discard, &diagnostic, verify)
@@ -908,7 +908,7 @@ func TestDarwinCustomPortListeners(t *testing.T) {
 	httpPort, httpsPort := freePorts(t)
 	var diagnostic bytes.Buffer
 	verify := func(p paths, c config) error { _, err := selectedStatusRoots(p.rootCertificate()); return err }
-	if err := setupDarwin(p, setupOptions{HTTPPort: &httpPort, HTTPSPort: &httpsPort}, io.Discard, &diagnostic, verify); err != nil {
+	if err := setupDarwin(p, setupOptions{Machine: "fixture", HTTPPort: &httpPort, HTTPSPort: &httpsPort}, io.Discard, &diagnostic, verify); err != nil {
 		t.Fatal(err, diagnostic.String())
 	}
 	c, err := readConfig(p.config)
@@ -1016,7 +1016,7 @@ func TestDarwinSetupRestartsFailedRegisteredJob(t *testing.T) {
 			p, service := darwinSetupFixture(t)
 			service.State = serviceState{State: "failed", Boot: "enabled"}
 			var out bytes.Buffer
-			if err := setupDarwin(p, setupOptions{Check: true}, &out, io.Discard, setupFixtureVerified); err != nil {
+			if err := setupDarwin(p, setupOptions{Machine: "fixture", Check: true}, &out, io.Discard, setupFixtureVerified); err != nil {
 				t.Fatal(err)
 			}
 			if !strings.Contains(out.String(), "Service action: one setup stop/start") || len(service.Actions) != 0 {
@@ -1025,7 +1025,7 @@ func TestDarwinSetupRestartsFailedRegisteredJob(t *testing.T) {
 			if failStart {
 				service.failAction = "start"
 			}
-			err := setupDarwin(p, setupOptions{}, io.Discard, io.Discard, setupFixtureVerified)
+			err := setupDarwin(p, setupOptions{Machine: "fixture"}, io.Discard, io.Discard, setupFixtureVerified)
 			if !failStart {
 				if err != nil || fmt.Sprint(service.Actions) != "[stop start]" || service.State.State != "active" || service.State.Boot != "enabled" {
 					t.Fatal(err, service.Actions, service.State)
@@ -1049,7 +1049,7 @@ func TestDarwinSetupRestartsFailedRegisteredJob(t *testing.T) {
 
 func TestDarwinSetupIgnoresStateRoot(t *testing.T) {
 	p, _ := darwinSetupFixture(t)
-	if err := setupDarwin(p, setupOptions{}, io.Discard, io.Discard, setupFixtureVerified); err != nil {
+	if err := setupDarwin(p, setupOptions{Machine: "fixture"}, io.Discard, io.Discard, setupFixtureVerified); err != nil {
 		t.Fatal(err)
 	}
 	rootPath := filepath.Join(p.installed.Storage, "pki/authorities/sandbar/root.crt")

@@ -96,7 +96,9 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 	// Manual reload retains the source version and exact edited bytes.
 	candidateSource := previousSource
 	if command != "reload" && command != "start" {
-		c.Version = 2
+		if c.Version == 1 {
+			c.Version = 2
+		}
 		c.Hostname = ""
 		c.UpstreamPort = 0
 		if err := c.validate(); err != nil {
@@ -107,6 +109,22 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 			return err
 		}
 	}
+	return publishConfigBytes(p, previousSource, candidateSource, c, legacy && command != "reload", command == "reload", out, errOut)
+}
+
+// The caller holds the route lock and has recovered before reading previousSource.
+func publishConfig(p paths, previousSource []byte, c config, migration bool, out, errOut io.Writer) error {
+	if err := c.validate(); err != nil {
+		return err
+	}
+	candidateSource, err := configBytes(c)
+	if err != nil {
+		return err
+	}
+	return publishConfigBytes(p, previousSource, candidateSource, c, migration, false, out, errOut)
+}
+
+func publishConfigBytes(p paths, previousSource, candidateSource []byte, c config, migration, requireRunning bool, out, errOut io.Writer) error {
 	if err := checkSelectedCaddy(p, caddyEnv(p), errOut); err != nil {
 		return err
 	}
@@ -157,7 +175,7 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 	if activeErr != nil && !isRouterStopped(activeErr) {
 		return fmt.Errorf("inspect private admin endpoint: %w", activeErr)
 	}
-	if command == "reload" && !running {
+	if requireRunning && !running {
 		return errors.New("router is stopped; start it to apply source configuration")
 	}
 	if p.installed != nil && running {
@@ -173,7 +191,7 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 	if err != nil {
 		return err
 	}
-	tx := transaction{Version: 1, Phase: "prepared", Reload: running, Migration: legacy && command != "reload",
+	tx := transaction{Version: 1, Phase: "prepared", Reload: running, Migration: migration,
 		PreviousSource: previousSource, CandidateSource: candidateSource, PreviousGenerated: previousGenerated,
 		CandidateGenerated: []byte(content), PreviousActive: active, CandidateActive: adapted}
 	if err := prepareTransaction(p, &tx); err != nil {
