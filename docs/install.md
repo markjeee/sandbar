@@ -1,6 +1,6 @@
 # Install Sandbar
 
-The checkout supports Linux amd64 and macOS arm64. Published beta.2 supports Linux amd64 only.
+Beta.3 targets Linux amd64 and macOS arm64. Beta.1 and beta.2 assets remain Linux-only.
 Linux uses apt-packaged Caddy with systemd, Polkit, and sudo. Ubuntu 24.04 is its acceptance target.
 macOS uses native Homebrew Caddy and one Sandbar-managed current-user LaunchAgent.
 Install prerequisites separately. Sandbar packages need no Go runtime.
@@ -9,26 +9,43 @@ Automated native checks establish development readiness. Real macOS installation
 
 ## Release installation
 
-Install `v0.1.0-beta.2` on Linux amd64:
+Install `v0.1.0-beta.3` on Linux amd64 or macOS arm64:
 
 ```sh
-curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/install.sh | sh
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.3/install.sh | sh
 ```
 
 The versioned installer downloads the matching archive and checks its SHA-256 checksum before replacing `sandbar`.
 The checksum comes from the same HTTPS release. It checks transfer integrity, not an independent signature.
 
-The published beta.2 destination defaults to `~/.local/bin` on Linux. Select another directory with `--bin-dir`:
+The destination defaults to `~/.local/bin` on Linux and `/usr/local/bin` on macOS. Select another directory with `--bin-dir`:
 
 ```sh
-curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/install.sh | sh -s -- --bin-dir "$HOME/bin"
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.3/install.sh | sh -s -- --bin-dir "$HOME/bin"
 ```
 
 Make sure the selected directory is in `PATH`, or use the full executable path.
 The installer does not edit shell profiles, install Caddy, start services, or change certificate trust.
 
-Beta.2 has no macOS release asset. Its installer cannot install Sandbar on macOS.
-Use checkout installation until a native release is published. Local candidates do not establish public download availability.
+macOS assets are unsigned and unnotarized. Local candidates do not establish public download availability.
+Actual launchd startup after logout/login remains deferred. Registration and start/stop checks do not establish that result.
+
+## Upgrade to beta.3
+
+Installing beta.3 replaces only the executable. Preview and apply setup separately using the platform commands below.
+Setup upgrades installed source to version 3 and saves a stable machine name, machine URLs, and Teleport settings.
+Matching setup preserves routes, configured ports, CA identity, and existing trust.
+Do not import the root again when its identity is unchanged. Request trust separately for a new CA.
+Beta.1 users must follow [explicit private-router migration](#upgrade-from-the-private-router).
+
+Older binaries cannot read version 3 configuration. Keep the setup backup reported during the upgrade.
+Rollback requires matched source, generated configuration, setup files, and service state before using the old binary.
+Keep original CA storage and trust. See [configuration upgrades and rollback](reference.md#upgrade-existing-source).
+For a private development home, use its matched `config.v1.backup.json` or `config.v2.backup.json` and generated Caddyfile backup.
+
+Both Teleport peers need beta.3 or another Teleport-capable build and prepared Caddy before registration.
+Apps must accept their machine-qualified URLs, including allowed hosts, CSRF origins, redirects, cookies, and login settings.
+See [Teleport](teleport.md) for commands and URL requirements. Registration configures only the connecting machine.
 
 ## Checkout installation
 
@@ -478,8 +495,7 @@ If the original state or restart command cannot be established, retain all evide
 
 ## Release preparation
 
-Published beta.2 assets and their historical release notes remain Linux-only.
-Prepare a distinct unreleased native candidate from the checkout:
+Prepare beta.3 with `scripts/release`, or prepare a distinct unreleased native candidate:
 
 ```sh
 scripts/release --version v0.1.0-beta.3-candidate
@@ -504,14 +520,22 @@ Run native packaging on the corresponding platform. Do not build or test Linux o
 
 - `sandbar_<version>_<os>_<arch>`, the native executable.
 - The matching `.tar.gz`, containing `sandbar`, `LICENSE`, `install.sh`, and `RELEASE_NOTES.md`.
-- `install.sh`, pinned to the candidate version.
-- `RELEASE_NOTES.md`, identifying the local candidate.
+- `install.sh`, pinned to the selected version.
+- `RELEASE_NOTES.md`, containing authored notes or identifying the local candidate.
 - `SHA256SUMS`, covering the executable, archive, installer, and release notes.
 
 Default output is `.sandbox/release/<version>/`. An explicit directory overrides it.
-The legacy no-option beta.2 packaging path remains Linux-only.
+Without options, `scripts/release` prepares beta.3 on either native platform.
+When `docs/releases/<version>.md` exists, packaging uses those authored notes.
+Other versions retain notes that identify an unpublished local candidate.
 Run `scripts/test-install` to test checkout builds and controlled release downloads into temporary destinations.
 These checks select platform defaults without writing to `/usr/local/bin`.
 A local candidate is unsigned development output, not a published or notarized macOS release.
 Keep existing beta.1 and beta.2 tags and assets unchanged. Publish new versions separately under their own tags.
 Verify public downloads and installation only after publication.
+
+For public beta.3 preparation, build the same committed revision on each native platform.
+Compare the installer, notes, and license bytes from both archives.
+Assemble both executables and archives with one shared installer and notes, then generate one combined SHA-256 manifest.
+That manifest covers six files. Upload those six files and the manifest as one GitHub prerelease.
+Use temporary `--bin-dir` destinations to verify both public downloads without setup, trust changes, or installed executable replacement.

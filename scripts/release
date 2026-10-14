@@ -3,12 +3,10 @@
 set -eu
 umask 077
 
-version='v0.1.0-beta.2'
-explicit_version=0
+version='v0.1.0-beta.3'
 if [ "${1:-}" = --version ]; then
-    [ "$#" -ge 2 ] && [ -n "$2" ] || { echo '--version requires an unreleased version' >&2; exit 1; }
+    [ "$#" -ge 2 ] && [ -n "$2" ] || { echo '--version requires a version' >&2; exit 1; }
     version=$2
-    explicit_version=1
     shift 2
     case "$version" in
         v0.1.0-beta.1|v0.1.0-beta.2) echo 'Choose an unreleased candidate version, not an existing release.' >&2; exit 1 ;;
@@ -21,16 +19,14 @@ esac
 case "$version" in *[!a-zA-Z0-9.+-]*) echo 'Version contains unsupported characters.' >&2; exit 1 ;; esac
 case "$(uname -s):$(uname -m)" in
     Linux:x86_64|Linux:amd64) target_os=linux; target_arch=amd64 ;;
-    Darwin:arm64)
-        [ "$explicit_version" = 1 ] || { echo 'macOS packaging requires --version with a distinct unreleased candidate version.' >&2; exit 1; }
-        target_os=darwin; target_arch=arm64 ;;
+    Darwin:arm64) target_os=darwin; target_arch=arm64 ;;
     *) echo 'Sandbar supports Linux amd64 and macOS arm64 only.' >&2; exit 1 ;;
 esac
 project_dir=$(CDPATH='' cd -P "$(dirname "$0")/.." && pwd)
 case "$#" in
     0) output_dir="$project_dir/.sandbox/release/$version" ;;
     1) output_dir=$1 ;;
-    *) echo 'Usage: scripts/release [--version <unreleased-version>] [output-directory]' >&2; exit 1 ;;
+    *) echo 'Usage: scripts/release [--version <version>] [output-directory]' >&2; exit 1 ;;
 esac
 cgo_enabled=0
 if [ "$target_os" = darwin ]; then
@@ -50,9 +46,11 @@ trap 'exit 1' HUP INT TERM
 CGO_ENABLED="$cgo_enabled" GOOS="$target_os" GOARCH="$target_arch" go -C "$project_dir" build -trimpath \
     -ldflags "-s -w -X main.version=$version" -o "$work_dir/sandbar" .
 cp "$project_dir/LICENSE" "$work_dir/LICENSE"
-# Candidate installers select the candidate assets, never the published beta.2.
+# Each installer selects only assets for its packaged version.
 sed "s/^version='[^']*'/version='$version'/" "$project_dir/install.sh" > "$work_dir/install.sh"
-if [ "$explicit_version" = 1 ]; then
+if [ -f "$project_dir/docs/releases/$version.md" ]; then
+    cp "$project_dir/docs/releases/$version.md" "$work_dir/RELEASE_NOTES.md"
+else
     cat > "$work_dir/RELEASE_NOTES.md" <<EOF
 # Sandbar $version
 
@@ -60,8 +58,6 @@ Unreleased local candidate for $target_os/$target_arch.
 This package does not establish public download availability or installed service acceptance.
 Install Caddy separately. Executable installation does not run setup or change certificate trust.
 EOF
-else
-    cp "$project_dir/docs/releases/$version.md" "$work_dir/RELEASE_NOTES.md"
 fi
 chmod 755 "$work_dir/sandbar" "$work_dir/install.sh"
 chmod 644 "$work_dir/LICENSE" "$work_dir/RELEASE_NOTES.md"
