@@ -9,16 +9,16 @@ Add, change, and remove app names while Caddy runs. Sandbar exits after each com
 Use Linux amd64 with apt Caddy and systemd, or macOS arm64 with Homebrew Caddy and Sandbar's user LaunchAgent. Install [Caddy](https://caddyserver.com/docs/install) v2.11.7 or a later v2 release separately.
 Linux also needs Polkit and sudo. Ubuntu 24.04 is its acceptance target.
 
-Teleport requires the unreleased checkout on both machines. Published Linux `v0.1.0-beta.2` does not include Teleport. Build with Go 1.27.2 or later. macOS also needs Xcode Command Line Tools:
+Install beta.3 on either platform with the versioned installer. macOS packages are unsigned and unnotarized:
 
 ```sh
-sh ./install.sh
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.3/install.sh | sh
 ```
 
 macOS installs a regular executable at `/usr/local/bin/sandbar`. Linux defaults to `~/.local/bin/sandbar`. Add that directory to `PATH`.
 
 Use `--bin-dir <directory>` for another destination. The installer requests macOS administrator access only for executable publication. It does not install Caddy, start services, change trust, or edit shell profiles.
-See [installation and upgrades](docs/install.md) for release installation, prerequisites, permissions, and beta.1 migration.
+See [installation and upgrades](docs/install.md) for prerequisites, explicit setup, version 3 backups and rollback, and beta.1 migration.
 
 ## Set up Caddy
 
@@ -72,7 +72,7 @@ Linux stop keeps boot startup enabled. macOS stop unregisters login startup. Sta
 
 ## Teleport to another machine
 
-Prepare remote Caddy and `app.sandbar.localhost` first. Both peers need the current checkout and completed setup.
+Prepare remote Caddy and `app.sandbar.localhost` first. Both peers need beta.3 or another Teleport-capable build and completed setup.
 This example assumes direct SSH alias `work`, remote machine name `work`, and HTTPS 443 on both machines. Use your existing SSH agent with keys loaded. Sandbar keeps dedicated SSH files under its configuration directory and does not manage keys or forward the agent.
 On the connecting machine, run `sandbar teleport register work`.
 
