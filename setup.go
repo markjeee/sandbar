@@ -157,7 +157,7 @@ func setupDirectory(path string, mode os.FileMode, uid, gid int) error {
 	}
 	return os.Chmod(path, mode)
 }
-func exportServiceRoot(p paths, undo *setupUndo) error {
+func readServiceRoot(p paths) ([]byte, error) {
 	path := filepath.Join(p.installed.Storage, "pki/authorities/sandbar/root.crt")
 	var data []byte
 	var err error
@@ -167,14 +167,14 @@ func exportServiceRoot(p paths, undo *setupUndo) error {
 			break
 		}
 		if !errors.Is(err, os.ErrNotExist) {
-			return err
+			return nil, err
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	if err != nil {
-		return fmt.Errorf("read service CA: %w", err)
+		return nil, fmt.Errorf("read service CA: %w", err)
 	}
-	return undo.write(p.rootCertificate(), data, installedRootMode, installedRootUID, installedRootUID)
+	return data, nil
 }
 func verifySetupSites(p paths, c config, sites []route) error {
 	roots, err := selectedStatusRoots(p.rootCertificate())

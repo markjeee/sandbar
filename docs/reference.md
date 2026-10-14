@@ -114,7 +114,11 @@ One installed lock serializes route changes. Private homes have separate locks.
 Linux shared files may belong to their last writer while retaining the `sandbar` group and required access modes.
 macOS state belongs only to the current user.
 Caddy keeps installed CA keys in its service storage, preserving unrelated CAs.
-The public root is `root.crt` in the installed state directory above.
+Linux exports its public root to `/var/lib/sandbar/root.crt`.
+macOS reads the original at `<verified Caddy storage>/pki/authorities/sandbar/root.crt`, without a state copy or symlink.
+Use the root path printed by Sandbar. Setup checks, status probes, and untrust use that original file.
+A missing or unreadable macOS original is an error, even when an old copy remains in Sandbar state.
+See [unused macOS root cleanup](install.md#remove-an-unused-macos-root-copy) before deleting an earlier copy.
 Private development routers use separate logs, control sockets, and certificates.
 An active or inaccessible private socket prevents another private start.
 Use `journalctl -u caddy.service` for Linux logs. macOS uses `<Homebrew prefix>/var/log/caddy.log`.

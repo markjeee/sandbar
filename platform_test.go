@@ -33,7 +33,7 @@ func testInstalledPaths(t *testing.T) (paths, *fakeService) {
 	service := &fakeService{State: serviceState{State: "inactive", Boot: "enabled"}}
 	i := &installation{ID: "fixture-v1", Binary: "/usr/bin/caddy", Unit: "fixture.service", Config: filepath.Join(root, "service/Caddyfile"), Globals: filepath.Join(root, "service/global.Caddyfile"), Source: filepath.Join(root, "source/config.json"), State: filepath.Join(root, "state"), Storage: filepath.Join(root, "storage"), Account: "fixture", UID: os.Getuid(), GID: os.Getgid(), GroupID: os.Getgid(), Service: service}
 	p := installedPaths(i)
-	for _, path := range []string{filepath.Dir(p.config), filepath.Dir(i.Config), p.state, p.workDir(), p.file("routes"), p.file("admin"), p.file("validation")} {
+	for _, path := range []string{filepath.Dir(p.config), filepath.Dir(i.Config), p.state, p.workDir(), p.file("routes"), p.file("admin"), p.file("validation"), filepath.Dir(p.rootCertificate())} {
 		if err := os.MkdirAll(path, installedDirectoryMode); err != nil {
 			t.Fatal(err)
 		}

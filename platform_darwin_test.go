@@ -248,6 +248,20 @@ func TestDarwinSetupPreviewFreshRepeatAndRollback(t *testing.T) {
 		t.Fatal(service.Actions, service.validations)
 	}
 	root := readTestFile(t, p.rootCertificate())
+	keyPath := filepath.Join(filepath.Dir(p.rootCertificate()), "root.key")
+	key := readTestFile(t, keyPath)
+	caPaths := []string{p.installed.Storage, filepath.Dir(p.rootCertificate()), p.rootCertificate(), keyPath}
+	caModes := make([]os.FileMode, len(caPaths))
+	for n, path := range caPaths {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		caModes[n] = info.Mode()
+	}
+	if _, err := os.Lstat(p.file("root.crt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("fresh setup exported a root", err)
+	}
 	top := readTestFile(t, p.installed.Config)
 	cfg, err := readConfig(p.config)
 	if err != nil {
@@ -266,6 +280,18 @@ func TestDarwinSetupPreviewFreshRepeatAndRollback(t *testing.T) {
 	}
 	if !bytes.Equal(root, readTestFile(t, p.rootCertificate())) || !bytes.Equal(top, readTestFile(t, p.installed.Config)) || !bytes.Equal(source, readTestFile(t, p.config)) {
 		t.Fatal("repeat changed CA, top file, or routes")
+	}
+	if _, err := os.Lstat(p.file("root.crt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("repeated setup exported a root", err)
+	}
+	if !bytes.Equal(key, readTestFile(t, keyPath)) {
+		t.Fatal("repeat changed the CA private key")
+	}
+	for n, path := range caPaths {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode() != caModes[n] {
+			t.Fatal("repeat changed CA storage permissions", path, err)
+		}
 	}
 	if bytes.Count(readTestFile(t, p.installed.Config), []byte(globalMarkerStart)) != 1 {
 		t.Fatal("duplicated integration")
@@ -1018,5 +1044,193 @@ func TestDarwinSetupRestartsFailedRegisteredJob(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDarwinSetupIgnoresStateRoot(t *testing.T) {
+	p, _ := darwinSetupFixture(t)
+	if err := setupDarwin(p, setupOptions{}, io.Discard, io.Discard, setupFixtureVerified); err != nil {
+		t.Fatal(err)
+	}
+	rootPath := filepath.Join(p.installed.Storage, "pki/authorities/sandbar/root.crt")
+	original := readTestFile(t, rootPath)
+	_, stale := statusCertificate(t, "old.localhost")
+	if bytes.Equal(original, stale) {
+		t.Fatal("fixture roots must differ")
+	}
+	if err := p.writeFile(p.file("root.crt"), stale); err != nil {
+		t.Fatal(err)
+	}
+	verify := func(p paths, c config) error {
+		if p.rootCertificate() != rootPath || !bytes.Equal(readTestFile(t, p.rootCertificate()), original) {
+			return errors.New("setup selected the old state copy")
+		}
+		return setupFixtureVerified(p, c)
+	}
+	if err := setupDarwin(p, setupOptions{}, io.Discard, io.Discard, verify); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stale, readTestFile(t, p.file("root.crt"))) || !bytes.Equal(original, readTestFile(t, rootPath)) {
+		t.Fatal("setup changed either certificate")
+	}
+	backups, err := filepath.Glob(p.file("backups/setup-*/backup.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range backups {
+		var backup setupUndo
+		if err := json.Unmarshal(readTestFile(t, path), &backup); err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range backup.Files {
+			if file.Path == p.file("root.crt") || file.Path == rootPath {
+				t.Fatal("setup backed up a certificate", file.Path)
+			}
+		}
+	}
+}
+
+func TestDarwinInstalledOriginalRootConsumers(t *testing.T) {
+	p, service := testInstalledPaths(t)
+	rootPath := filepath.Join(p.installed.Storage, "pki/authorities/sandbar/root.crt")
+	if p.rootCertificate() != rootPath {
+		t.Fatal("root did not use verified storage", p.rootCertificate())
+	}
+	c, _, root := statusHTTPS(t, "app.sandbar.localhost", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
+	_, stale := statusCertificate(t, "old.localhost")
+	for path, data := range map[string][]byte{rootPath: root, p.file("root.crt"): stale} {
+		if err := p.writeFile(path, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source, err := configBytes(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.writeFile(p.config, source); err != nil {
+		t.Fatal(err)
+	}
+	statusGenerated(t, p, c)
+	service.State = serviceState{State: "active", Boot: "enabled"}
+	var out bytes.Buffer
+	// An unavailable admin socket is reported separately from the route's TLS probe.
+	if err := status(p, &out, io.Discard); err == nil || !strings.Contains(out.String(), "HTTP 200 (reachable)") {
+		t.Fatal("status did not verify with the original root", err, out.String())
+	}
+	if !bytes.Equal(root, readTestFile(t, rootPath)) || !bytes.Equal(stale, readTestFile(t, p.file("root.crt"))) || len(service.Actions) != 0 {
+		t.Fatal("status changed certificates or service")
+	}
+}
+
+func TestDarwinInstalledUntrustOriginalRoot(t *testing.T) {
+	p, service := testInstalledPaths(t)
+	rootPath := filepath.Join(p.installed.Storage, "pki/authorities/sandbar/root.crt")
+	keyPath := filepath.Join(filepath.Dir(rootPath), "root.key")
+	_, root := statusCertificate(t, "sandbar.localhost")
+	_, stale := statusCertificate(t, "old.localhost")
+	key := []byte("retained private key fixture")
+	for path, data := range map[string][]byte{rootPath: root, p.file("root.crt"): stale, keyPath: key, p.config: []byte("invalid routes")} {
+		if err := p.writeFile(path, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := fakeCaddy(t)
+	p.installed.Binary = filepath.Join(filepath.Dir(calls), "caddy")
+	var out, diagnostic bytes.Buffer
+	if err := changeTrust(p, "untrust", &out, &diagnostic); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(readCalls(t, calls), [][]string{{"version"}, {"untrust", "--cert", rootPath}}) {
+		t.Fatal(readCalls(t, calls))
+	}
+	if !strings.Contains(out.String(), rootPath) || !strings.Contains(diagnostic.String(), rootPath) || strings.Contains(out.String(), p.file("root.crt")) {
+		t.Fatal("untrust reported the wrong certificate", out.String(), diagnostic.String())
+	}
+	for path, data := range map[string][]byte{rootPath: root, p.file("root.crt"): stale, keyPath: key, p.config: []byte("invalid routes")} {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0600 || !bytes.Equal(data, readTestFile(t, path)) {
+			t.Fatal("untrust changed retained data or permissions", path, err)
+		}
+	}
+	if len(service.Actions) != 0 || service.State.State != "inactive" {
+		t.Fatal("untrust changed the stopped service")
+	}
+}
+
+func TestDarwinOriginalRootUnavailable(t *testing.T) {
+	for _, kind := range []string{"missing", "unreadable"} {
+		t.Run(kind, func(t *testing.T) {
+			p, service := testInstalledPaths(t)
+			root := filepath.Join(p.installed.Storage, "pki/authorities/sandbar/root.crt")
+			_, stale := statusCertificate(t, "old.localhost")
+			if err := p.writeFile(p.file("root.crt"), stale); err != nil {
+				t.Fatal(err)
+			}
+			want := os.ErrNotExist
+			if kind == "unreadable" {
+				if os.Geteuid() == 0 {
+					t.Skip("root can read mode-0000 fixture files")
+				}
+				if err := os.WriteFile(root, stale, 0000); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(root, 0600) })
+				want = os.ErrPermission
+			}
+			calls := fakeCaddy(t)
+			p.installed.Binary = filepath.Join(filepath.Dir(calls), "caddy")
+			for _, check := range []func() error{
+				func() error { return changeTrust(p, "untrust", io.Discard, io.Discard) },
+				func() error { _, err := selectedStatusRoots(p.rootCertificate()); return err },
+				func() error { return waitForInstalledStartup(p, config{}) },
+			} {
+				err := check()
+				if !errors.Is(err, want) || !strings.Contains(err.Error(), "read selected root certificate "+root) {
+					t.Fatal("original-root access error was lost", err)
+				}
+			}
+			start := time.Now()
+			if _, err := readServiceRoot(p); !errors.Is(err, want) {
+				t.Fatal(err)
+			}
+			elapsed := time.Since(start)
+			if elapsed > 6*time.Second || (kind == "missing" && elapsed < 3*time.Second) {
+				t.Fatal("setup root readiness changed its bound", elapsed)
+			}
+			if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("invoked certificate removal for an unavailable original", err)
+			}
+			if !bytes.Equal(stale, readTestFile(t, p.file("root.crt"))) || len(service.Actions) != 0 {
+				t.Fatal("access failure changed the old copy or service")
+			}
+			info, err := os.Stat(root)
+			if kind == "missing" && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("regenerated a missing original", err)
+			}
+			if kind == "unreadable" && (err != nil || info.Mode().Perm() != 0000) {
+				t.Fatal("changed original permissions", err)
+			}
+		})
+	}
+}
+
+func TestDarwinSetupWaitsForOriginalRoot(t *testing.T) {
+	p, _ := testInstalledPaths(t)
+	rootPath := filepath.Join(p.installed.Storage, "pki/authorities/sandbar/root.crt")
+	_, root := statusCertificate(t, "sandbar.localhost")
+	written := make(chan error, 1)
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		written <- atomicWriteMode(rootPath, root, 0600, -1, -1)
+	}()
+	got, err := readServiceRoot(p)
+	if writeErr := <-written; writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if err != nil || !bytes.Equal(got, root) {
+		t.Fatal("setup did not wait for Caddy's original root", err)
+	}
+	if _, err := os.Lstat(p.file("root.crt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("root readiness created a state copy", err)
 	}
 }

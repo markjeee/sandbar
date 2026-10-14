@@ -242,7 +242,7 @@ func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, compo
 	if err := i.Service.Control("start", out, errOut); err != nil {
 		return err
 	}
-	if err := exportServiceRoot(p, &undo); err != nil {
+	if _, err := readServiceRoot(p); err != nil {
 		return err
 	}
 	if err := verify(p, cfg); err != nil {

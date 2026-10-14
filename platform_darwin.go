@@ -234,8 +234,9 @@ func (s *homebrewService) Validate(out, errOut io.Writer) error {
 	return runBounded(s.installation.Binary, installedCaddyEnv(s.installation), nil, out, errOut, "validate", "--config", filepath.Join(s.installation.State, "validation/Caddyfile"), "--adapter", "caddyfile")
 }
 
-const installedRootMode os.FileMode = 0600
-const installedRootUID = -1
+func installedRootCertificate(i *installation) string {
+	return filepath.Join(i.Storage, "pki/authorities/sandbar/root.crt")
+}
 
 // launchctl print separates effective arguments and environment from inherited defaults.
 func checkLoadedHomebrewJob(i *installation, data []byte) error {

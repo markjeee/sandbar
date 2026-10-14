@@ -68,7 +68,7 @@ func installedPaths(i *installation) paths {
 }
 func (p paths) rootCertificate() string {
 	if p.installed != nil {
-		return p.file("root.crt")
+		return installedRootCertificate(p.installed)
 	}
 	return p.file("caddy/pki/authorities/local/root.crt")
 }

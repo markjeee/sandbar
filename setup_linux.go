@@ -17,6 +17,14 @@ import (
 	"syscall"
 )
 
+func exportServiceRoot(p paths, undo *setupUndo) error {
+	data, err := readServiceRoot(p)
+	if err != nil {
+		return err
+	}
+	return undo.write(p.rootCertificate(), data, 0644, 0, 0)
+}
+
 type setupOptions struct {
 	User                        string
 	Check, ReplaceDefault       bool

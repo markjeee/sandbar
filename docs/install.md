@@ -112,7 +112,10 @@ The installed layout is:
 Owned directories use `0700`, and private files and the control socket permit only this user.
 The Homebrew Caddyfile remains at `<prefix>/etc/Caddyfile`.
 Caddy storage remains at `<prefix>/var/lib/caddy`, including its `sandbar` authority and unrelated CAs.
-Sandbar copies only the public selected root to `~/Library/Application Support/sandbar/state/root.crt`.
+Sandbar reads Caddy's original public root at `<verified Caddy storage>/pki/authorities/sandbar/root.crt`.
+A typical arm64 Homebrew path is `/opt/homebrew/var/lib/caddy/pki/authorities/sandbar/root.crt`.
+Use the root path printed by Sandbar for your verified installation.
+Setup checks, status probes, and untrust use this original file. Sandbar creates no copy or symlink in its state directory.
 Service logs use `<prefix>/var/log/caddy.log`. Sandbar reports the verified path.
 
 With the selected ports above, open `https://sandbar.localhost:8443` after setup.
@@ -127,6 +130,37 @@ There is no automatic macOS uninstaller. Review setup backups before restoring o
 
 Real service, browser trust, exact-root removal, and new-login checks remain pending until each installation acceptance check runs.
 See the [installation checklist](development.md#macos-installation-acceptance).
+
+## Remove an unused macOS root copy
+
+After installing the updated CLI, an earlier `~/Library/Application Support/sandbar/state/root.crt` becomes unused.
+Fresh setup does not create it, and repeated setup leaves any old copy untouched.
+Sandbar uses Caddy's original even if the old copy differs. A missing or unreadable original causes an error without fallback.
+
+Before manual cleanup, use the original root path printed by the updated CLI.
+Check that it is readable and compare both certificate identities:
+
+```sh
+root_cert='/replace/with/the/printed/original/root.crt'
+old_root="$HOME/Library/Application Support/sandbar/state/root.crt"
+test -r "$root_cert"
+openssl x509 -in "$root_cert" -noout -subject -issuer -serial -sha256 -fingerprint
+openssl x509 -in "$old_root" -noout -subject -issuer -serial -sha256 -fingerprint
+```
+
+Continue only if the original is readable, both certificate commands succeed, and their SHA-256 fingerprints match.
+If they differ, keep the old certificate and its fingerprint for a separately requested trust cleanup.
+If the old file is absent, no cleanup is needed.
+After confirming a match, remove only the unused copy:
+
+```sh
+rm -- "$old_root"
+```
+
+Deleting this duplicate does not remove trust and requires no certificate import or trust removal.
+Keep Caddy's original root, private keys, storage permissions, unrelated CAs, and historical setup backups unchanged.
+The original remains available for status checks and untrust while Caddy is stopped.
+Sandbar does not perform this cleanup automatically.
 
 ## Connect the standard Caddy service
 

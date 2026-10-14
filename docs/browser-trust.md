@@ -45,7 +45,11 @@ Keep private CA keys private. Import only the public `root.crt`.
 
 `start`, `trust`, and `untrust` identify the public root certificate path.
 Installed Linux public root: `/var/lib/sandbar/root.crt`.
-Installed macOS public root: `~/Library/Application Support/sandbar/state/root.crt`.
+Installed macOS public root: `<verified Caddy storage>/pki/authorities/sandbar/root.crt`.
+A typical arm64 Homebrew path is `/opt/homebrew/var/lib/caddy/pki/authorities/sandbar/root.crt`. Use Sandbar's printed path.
+macOS reads this original directly and does not create a copy or symlink in Sandbar state.
+After installing the updated CLI, follow [manual duplicate cleanup](install.md#remove-an-unused-macos-root-copy) for an earlier state copy.
+Deleting a verified duplicate does not change trust. Keep any differing old certificate for deliberate trust removal.
 With `--home <directory>`, it is `<directory>/state/caddy/pki/authorities/local/root.crt`.
 The old beta defaults were `$XDG_STATE_HOME/sandbar/caddy/pki/authorities/local/root.crt`, or `~/.local/state/sandbar/caddy/pki/authorities/local/root.crt`.
 Migration preserves that root's bytes and signing material under the installed `sandbar` authority.
@@ -161,6 +165,7 @@ sandbar untrust
 `untrust` delegates `caddy untrust --cert <selected-root.crt>`.
 It works after Caddy stops and does not need valid route configuration.
 The stored public root must remain readable. Sandbar does not search other homes or regenerate a missing root.
+On macOS, this is Caddy's original file. Sandbar does not fall back to an old copy in its state directory.
 Configuration, logs, the public certificate, and private CA keys remain intact.
 Caddy can remove trust without deleting a certificate entry completely.
 Repeated commands retain Caddy's result. They do not replace the CA or promise atomic changes across stores.

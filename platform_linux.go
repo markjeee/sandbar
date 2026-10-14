@@ -193,8 +193,9 @@ const setupCommand = "sudo /absolute/path/to/sandbar setup --user <name>"
 func installedLogGuidance(i *installation) string { return "journalctl -u caddy.service" }
 func installedCaddyEnv(i *installation) []string  { return os.Environ() }
 
-const installedRootMode os.FileMode = 0644
-const installedRootUID = 0
+func installedRootCertificate(i *installation) string {
+	return filepath.Join(i.State, "root.crt")
+}
 
 const registerLoginStartup = false
 
