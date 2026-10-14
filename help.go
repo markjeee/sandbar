@@ -11,6 +11,7 @@ Usage: sandbar [--home <directory>] <command> [options]
 Commands:
   setup     Connect Sandbar to the installed Caddy service
   init      Create an empty app list
+  teleport  Connect to apps on another Sandbar machine
   add       Give an app an HTTPS name
   rm        Remove an app name
   ls        List apps and their addresses
@@ -56,11 +57,13 @@ func helpText(command string) (string, bool) {
 }
 
 var commandHelp = map[string]string{
+	"teleport": teleportCommandHelp,
 	"setup": platformHelp(`Connect Sandbar to apt-packaged Caddy and systemd on Linux amd64.
 
 Usage: sandbar setup --user <name> [options]
 
 Options:
+  --machine <name>         Save the initial stable machine name
   --check                  Preview changes without applying them
   --replace-default-site   Back up and replace Caddy's stock welcome site
   --migrate-config <file>   Use the old router's app list
@@ -76,12 +79,16 @@ Setup enables Caddy at boot. It does not install Caddy or certificate trust.
 Migration needs both paths and keeps the existing root certificate.
 Installed use requires ports 80 and 443. Legacy routers with other ports cannot migrate.
 Custom sites remain protected. Review conflicts before changing them.
+Machine names use the lowercase OS hostname first label by default.
+Saved names survive OS renames. An established name cannot change.
+Setup upgrades older source with its existing backup and validation path.
 Do not use --home or SANDBAR_HOME with setup. See docs/install.md for details.
 `, `Connect Homebrew Caddy to Sandbar's user LaunchAgent on macOS arm64.
 
 Usage: sandbar setup [options]
 
 Options:
+  --machine <name>         Save the initial stable machine name
   --check                  Preview changes without applying them
   --http-port <port>       Installed HTTP redirect port
   --https-port <port>      Installed HTTPS port
@@ -102,13 +109,17 @@ Setup saves selected ports for later start, reload, and repeated setup.
 Port settings affect shared Caddy settings. Conflicting explicit settings are rejected.
 For a new CA, request sandbar trust separately. Migration keeps existing trust.
 Custom sites remain protected. Review conflicts before changing them.
+Machine names use the lowercase OS hostname first label by default.
+Saved names survive OS renames. An established name cannot change.
+Setup upgrades older source with its existing backup and validation path.
 Do not use --home or SANDBAR_HOME with setup. See docs/install.md for details.
 `),
 	"init": `Create an empty app list, or add the first app.
 
-Usage: sandbar init [--http-port <port>] [--https-port <port>] [<hostname> <app-address>]
+Usage: sandbar init [options] [<hostname> <app-address>]
 
 Options:
+  --machine <name>      Initial stable machine name
   --http-port <port>    Development HTTP redirect port (default 80)
   --https-port <port>   Development HTTPS port (default 443)
 
@@ -117,6 +128,10 @@ First development app: sandbar --home /tmp/sandbar-demo init app.sandbar.localho
 Development: sandbar --home /tmp/sandbar-demo init --http-port 8080 --https-port 8443
 
 Options must come before the hostname. Existing settings are kept.
+The initial machine name defaults to the lowercase OS hostname first label.
+Use one ASCII DNS label of at most 55 characters. Saved identity cannot change.
+Development init upgrades older source with validated routes and a private backup.
+Machine aliases route apps locally. See docs/reference.md for upgrade recovery.
 Run setup first for installed use.
 ` + platformHelp("Installed Caddy always uses ports 80 and 443.", "Fresh installed defaults are HTTP 80 and HTTPS 443. Select other ports through macOS setup.") + `
 Use --home for a separate development router with other ports.

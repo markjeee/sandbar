@@ -31,6 +31,7 @@ func renderInstalledGlobals(c config, adminAddress, rootCert, rootKey string) st
 		fmt.Fprintf(&b, "\t\troot {\n\t\t\tcert %s\n\t\t\tkey %s\n\t\t}\n", strconv.Quote(rootCert), strconv.Quote(rootKey))
 	}
 	b.WriteString("\t}\n}\n")
+	b.WriteString(renderTeleportGlobals(c))
 	return b.String()
 }
 
@@ -48,19 +49,20 @@ func renderInstalledRoutes(c config, ipv6 bool) (string, error) {
 		bind += " [::1]"
 	}
 	var b strings.Builder
-	sites := append([]route{{Hostname: "sandbar.localhost"}}, c.Routes...)
+	sites := c.localSites(true)
 	for _, r := range sites {
 		fmt.Fprintf(&b, "https://%s:%d {\n\tbind %s\n\ttls {\n\t\tissuer internal {\n\t\t\tca sandbar\n\t\t}\n\t}\n", r.Hostname, c.HTTPSPort, bind)
-		if r.Hostname == "sandbar.localhost" {
+		if r.Upstream == "" {
 			fmt.Fprintf(&b, "\theader Content-Type \"text/html; charset=utf-8\"\n\trespond %s 200\n", strconv.Quote(welcomeHTML))
 		} else {
-			fmt.Fprintf(&b, "\treverse_proxy %s\n", r.Upstream)
+			fmt.Fprintf(&b, "\treverse_proxy %s {\n\t\theader_up Host {hostport}\n\t}\n", r.Upstream)
 		}
 		fmt.Fprintf(&b, "}\n\nhttp://%s:%d {\n\tbind %s\n\tredir %s{uri} 308\n}\n\n", r.Hostname, c.HTTPPort, bind, c.routeURL(r.Hostname))
 	}
 	// An explicit fallback prevents Caddy's automatic redirect fallback from
 	// redirecting names that Sandbar does not serve. Exact custom sites retain priority.
-	fmt.Fprintf(&b, "http://:%d {\n\tbind %s\n\trespond 404\n}\n", c.HTTPPort, bind)
+	b.WriteString(renderTeleportHTTPSRoutes(c, bind, "sandbar"))
+	fmt.Fprintf(&b, "http://:%d {\n\tbind %s\n%s\trespond 404\n}\n", c.HTTPPort, bind, renderTeleportHTTPHandlers(c))
 	return strings.TrimRight(b.String(), "\n") + "\n", nil
 }
 
@@ -459,8 +461,8 @@ func checkInstalledAdapted(data []byte, c config, admin string) error {
 	if err := c.validate(); err != nil {
 		return err
 	}
-	hosts := map[string]bool{"sandbar.localhost": true}
-	for _, r := range c.Routes {
+	hosts := map[string]bool{}
+	for _, r := range c.localSites(true) {
 		hosts[r.Hostname] = true
 	}
 	return checkInstalledAdaptedHosts(data, c, admin, hosts)
@@ -527,7 +529,7 @@ func checkInstalledAdaptedHosts(data []byte, c config, admin string, hosts map[s
 	if !ok || ca.Name != "sandbar local CA" {
 		return errors.New("the Caddy CA sandbar conflicts with Sandbar's dedicated CA")
 	}
-	hostCounts := map[string]int{}
+	hostCounts := map[string]map[string]int{}
 	for name, server := range doc.Apps.HTTP.Servers {
 		var names []string
 		if err := collectCaddyHosts(server.Routes, &names); err != nil {
@@ -556,7 +558,12 @@ func checkInstalledAdaptedHosts(data []byte, c config, admin string, hosts map[s
 						return fmt.Errorf("the Caddy automatic certificate settings prevent Sandbar HTTPS for %s", host)
 					}
 				}
-				hostCounts[host]++
+				if hostCounts[host] == nil {
+					hostCounts[host] = map[string]int{}
+				}
+				for _, listen := range server.Listen {
+					hostCounts[host][listen]++
+				}
 				for _, listen := range server.Listen {
 					h, _, err := net.SplitHostPort(listen)
 					ip := net.ParseIP(h)
@@ -574,7 +581,15 @@ func checkInstalledAdaptedHosts(data []byte, c config, admin string, hosts map[s
 		}
 	}
 	for host := range hosts {
-		if hostCounts[host] != 2 {
+		ports := map[string]bool{}
+		for address, count := range hostCounts[host] {
+			if count != 1 {
+				return fmt.Errorf("the Caddy hostname %s has conflicting routes on %s", host, address)
+			}
+			_, port, _ := net.SplitHostPort(address)
+			ports[port] = true
+		}
+		if !ports[strconv.Itoa(c.HTTPPort)] || !ports[strconv.Itoa(c.HTTPSPort)] {
 			return fmt.Errorf("the Caddy hostname %s has conflicting or missing HTTP/HTTPS routes", host)
 		}
 		found := false
@@ -592,7 +607,7 @@ func checkInstalledAdaptedHosts(data []byte, c config, admin string, hosts map[s
 			return fmt.Errorf("the Caddy hostname %s has no Sandbar certificate policy", host)
 		}
 	}
-	return nil
+	return checkTeleportAdapted(data, c, "sandbar")
 }
 
 func collectCaddyHosts(raw json.RawMessage, hosts *[]string) error {

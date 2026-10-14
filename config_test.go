@@ -102,7 +102,7 @@ func TestInit(t *testing.T) {
 	}
 	p := testPaths(t, home)
 	c, err := readConfig(p.config)
-	if err != nil || !reflect.DeepEqual(c.Routes, []route{{"netbox.sandbar.localhost", "http://127.0.0.1:8000"}}) || c.Version != 2 {
+	if err != nil || !reflect.DeepEqual(c.Routes, []route{{"netbox.sandbar.localhost", "http://127.0.0.1:8000"}}) || c.Version != 3 {
 		t.Fatalf("%+v %v", c, err)
 	}
 	before, err := os.Stat(p.config)
@@ -247,6 +247,7 @@ func FuzzConfig(f *testing.F) {
 	for _, input := range []string{
 		`{"version":1,"hostname":"NETBOX.sandbar.localhost","upstream_port":8000,"http_port":80,"https_port":443}`,
 		`{"version":1,"hostname":"a.b.sandbar.localhost","upstream_port":8000,"http_port":8080,"https_port":8443}`,
+		`{"version":3,"machine":"test","http_port":18080,"https_port":18443,"routes":[],"teleports":[]}`,
 		`null`, `{}`, `{`, `{"version":2}`, `{"extra":true}`, `[]`,
 	} {
 		f.Add([]byte(input))

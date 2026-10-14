@@ -73,6 +73,7 @@ assert_legacy_unchanged() {
     [ "$(cat "$legacy_home/state/caddy.pid")" = "$legacy_pid" ] || fail 'pre-cutover rejection changed legacy PID'
     probe_legacy || fail 'pre-cutover rejection changed legacy route'
     cmp "$state/legacy-root.crt" "$legacy_root" || fail 'legacy root changed'
+    cmp "$state/legacy.config.json" "$legacy_home/config.json" || fail 'legacy source changed'
 }
 assert_control_unchanged() {
     [ "$(cat "$control_home/state/caddy.pid")" = "$control_pid" ] || fail 'development router PID changed'
@@ -144,9 +145,22 @@ as_user "$binary" --home "$control_home" start
 control_pid=$(cat "$control_home/state/caddy.pid")
 cp "$control_root" "$state/control-root.crt"
 as_user "$binary" --home "$legacy_home" init legacy.sandbar.localhost 19191
+# The current CLI creates version 3. Keep this guarded fixture on the prior source format.
+as_user python3 - "$legacy_home/config.json" <<'PYTHON'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+source = json.loads(path.read_text())
+source['version'] = 2
+source.pop('machine')
+source.pop('teleports')
+path.write_text(json.dumps(source, indent=2) + '\n')
+PYTHON
+cp -p "$legacy_home/config.json" "$state/legacy.config.json"
 start_legacy_unit
 legacy_pid=$(cat "$legacy_home/state/caddy.pid")
 cp "$legacy_root" "$state/legacy-root.crt"
+cp -p "$legacy_home/state/Caddyfile" "$state/legacy.Caddyfile"
 probe_legacy || fail 'legacy route did not start'
 assert_control_unchanged
 migrate --check > "$state/preview.log" 2>&1
@@ -272,7 +286,26 @@ systemctl is-active --quiet caddy.service || fail 'standard service is not activ
 [ "$(systemctl is-enabled caddy.service)" = enabled ] || fail 'standard service is not enabled'
 cmp "$state/legacy-root.crt" /var/lib/sandbar/root.crt || fail 'migration changed the public root'
 cmp "$legacy_root" /var/lib/caddy/.local/share/caddy/pki/authorities/sandbar/root.crt || fail 'service root differs from legacy root'
-cmp "$legacy_home/config.json" /etc/sandbar/config.json || fail 'migration changed source routes'
+cmp "$state/legacy.config.json" "$legacy_home/config.json" || fail 'migration changed original source'
+python3 - "$state/legacy.config.json" /etc/sandbar/config.json <<'PYTHON'
+import json, re, sys
+from pathlib import Path
+original, installed = [json.loads(Path(path).read_text()) for path in sys.argv[1:]]
+if original['version'] != 2 or installed['version'] != 3:
+    raise SystemExit('Migration did not upgrade version 2 source to version 3')
+for key in ('http_port', 'https_port', 'routes'):
+    if installed[key] != original[key]:
+        raise SystemExit('Migration changed ' + key)
+machine = installed.get('machine', '')
+if len(machine) > 55 or re.fullmatch(r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?', machine) is None:
+    raise SystemExit('Migration did not save a valid machine identity')
+if installed.get('teleports') != []:
+    raise SystemExit('Migration did not start with an empty destination array')
+PYTHON
+backup_dir=$(sed -n 's/^Setup backup: //p' "$state/success.log" | tail -1)
+[ -n "$backup_dir" ] || fail 'successful setup did not report a backup directory'
+cmp "$state/legacy.config.json" "$backup_dir/legacy/config.json" || fail 'migration backup changed original source'
+cmp "$state/legacy.Caddyfile" "$backup_dir/legacy/Caddyfile" || fail 'migration backup changed original generated configuration'
 for name in root.key intermediate.crt intermediate.key; do
     cmp "$legacy_home/state/caddy/pki/authorities/local/$name" \
       "/var/lib/caddy/.local/share/caddy/pki/authorities/sandbar/$name" || fail "migration changed CA material: $name"

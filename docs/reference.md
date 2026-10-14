@@ -27,7 +27,7 @@ Caddy verifies certificates for HTTPS apps. Custom app trust settings are not su
 
 ## Route changes
 
-`add` succeeds unchanged for identical normalized version 2 settings. A different address requires `--replace`.
+`add` succeeds unchanged for identical normalized version 2 or 3 settings. A different address requires `--replace`.
 `rm` rejects unknown names. Removing the final app keeps the installed welcome page and certificates.
 Removing a route never removes certificate trust.
 
@@ -79,14 +79,16 @@ An explicit `--home`, or `SANDBAR_HOME` when the flag is absent, selects a [priv
 
 Edit the app list, then run `sandbar reload` while running or `sandbar start` while stopped.
 Do not edit generated Caddy files.
-`init` creates an empty version 2 configuration and preserves matching existing settings.
+`init` creates an empty version 3 configuration and preserves existing routes and listener ports.
 The `init <hostname> <app-address>` form remains available for a new configuration.
-Installed use requires completed setup. Private development initialization does not require Caddy.
+Installed use requires completed setup. Fresh private development initialization does not require Caddy. Upgrading version 1 or 2 source requires Caddy validation.
 Options must precede positional arguments.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
+  "machine": "mark-pro4",
+  "teleports": [],
   "http_port": 80,
   "https_port": 443,
   "routes": [
@@ -109,6 +111,62 @@ Unknown fields and invalid ports are rejected.
 Version 1 remains readable. A successful `add` or `rm` converts it to version 2.
 Conversion first saves the exact source in `config.v1.backup.json` beside `config.json`.
 An identical version 1 addition also performs this conversion.
+
+## Machine identity and local aliases
+
+Setup and development `init` save a machine name automatically.
+The initial suggestion is the lowercase first label from the OS hostname.
+Use `--machine <name>` to select a different initial name, or when the suggestion is invalid.
+Names must contain one ASCII DNS label, with at most 55 characters.
+Saved identity stays unchanged after an OS rename. Changing an established name is not supported.
+
+```sh
+sandbar setup --machine mark-pro4
+sandbar --home /tmp/sandbar-demo init --machine demo --http-port 18080 --https-port 18443
+```
+
+Every canonical app gains an alias automatically.
+For machine `mark-pro4`, `app.sandbar.localhost` also serves `app.sandbar-mark-pro4.localhost`.
+Nested names retain all labels, such as `api.app.sandbar-mark-pro4.localhost`.
+Both names reach the same backend directly, without SSH or a redirect to the canonical hostname.
+The backend receives the requested hostname and browser-facing port.
+Add, replace, and remove canonical routes. Their aliases change together and do not appear in `ls`.
+
+Installed routers serve both `sandbar.localhost` and `sandbar-<machine>.localhost` as static welcome pages.
+Version 3 private homes serve only the machine-qualified welcome, alongside configured apps.
+For the private example above, visit `https://sandbar-demo.localhost:18443`.
+Installed mark-pro4 uses `https://sandbar-mark-pro4.localhost` on HTTPS 443.
+
+Configure apps to accept their canonical and machine-qualified URLs.
+Review allowed hosts, redirects, cookies, CSRF origins, and login callback settings.
+Sandbar does not rewrite application URLs or response bodies.
+Identical full URLs on two machines need matching browser-facing HTTPS ports.
+
+`teleport info --json` describes a prepared peer without changing it.
+It returns protocol version 1, saved machine identity, HTTPS port, and the selected public root PEM.
+Use `--home` before `teleport` for a private development peer.
+Installed peers require completed setup. Private peers require initialized version 3 source and an existing public CA.
+Start the private router once to create its CA. The metadata command does not create certificates or read private keys.
+
+## Upgrade existing source
+
+Versions 1 and 2 remain readable for local commands.
+Run setup for installed upgrades, or explicit development `init` for a private upgrade.
+The upgrade preserves routes, saved ports, and CA identity, then enables automatic aliases.
+A failed Caddy validation leaves accepted source and active routes unchanged.
+Read-only commands do not upgrade source. Version 3 app changes retain destination settings.
+Older Sandbar binaries cannot read version 3 source.
+
+Development upgrades reuse the route transaction and save the original source beside `config.json` as `config.v1.backup.json` or `config.v2.backup.json`.
+When an original generated file exists, the matching `config.v1.backup.Caddyfile` or `config.v2.backup.Caddyfile` is saved too.
+An earlier version 1 to version 2 route conversion keeps its own version 1 backup.
+Installed setup uses its existing setup backup, containing source and generated files with their modes and owners.
+
+For rollback, stop the selected router and keep the accepted version 3 files separately.
+Restore the source and generated files from the same upgrade backup before using an older binary.
+If development initialization had no generated file before the upgrade, remove only the upgrade-generated Caddyfile after preserving it.
+For installed rollback, restore all matched setup files and service state using [setup recovery](install.md#setup-and-migration-recovery).
+Keep the original CA storage and trust. Do not combine source from one backup with generated configuration from another.
 
 Linux keeps `/etc/caddy/Caddyfile`. macOS keeps `<Homebrew prefix>/etc/Caddyfile`.
 Setup adds marked imports and preserves unrelated supported sites and settings.
@@ -152,3 +210,25 @@ Avoid external Caddy edits and commands while a Sandbar change runs.
 Other commands do not take Sandbar's lock. Sandbar detects observable conflicts but cannot coordinate arbitrary administrator actions atomically.
 Changed external inputs require review and explicit setup reconciliation before another route change.
 For one-time setup or migration failures, use the separate [manual recovery guide](install.md#setup-and-migration-recovery).
+
+## Teleport destinations
+
+Setup and development initialization enable machine-qualified URLs automatically.
+For example, `website.sandbar-mark-work-rise.localhost` routes locally on mark-work-rise and through a registered destination on another machine.
+The alias keeps every app label, including `api.website.sandbar-mark-work-rise.localhost`.
+Configure each app to accept its machine-qualified URL.
+
+```sh
+sandbar teleport register mark-work-rise
+sandbar teleport ls
+sandbar teleport disconnect mark-work-rise
+sandbar teleport connect mark-work-rise
+sandbar teleport rm mark-work-rise
+```
+
+Registration calls connect after saving the destination. A failed connect retains registration for explicit retry.
+Disconnect retains its route. Removal disconnects and removes its route and destination proxy trust.
+`ls` reports observed SSH state, not app health.
+The invoking user owns the background connection. Boot, login, and Caddy lifecycle commands do not connect it.
+
+See [Teleport](teleport.md) for direct SSH options, private files, app settings, trust, and error behavior.

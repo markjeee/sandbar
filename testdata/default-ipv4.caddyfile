@@ -20,7 +20,9 @@
 
 https://netbox.sandbar.localhost:443 {
 	tls internal
-	reverse_proxy http://127.0.0.1:8000
+	reverse_proxy http://127.0.0.1:8000 {
+		header_up Host {hostport}
+	}
 }
 
 http://netbox.sandbar.localhost:80 {

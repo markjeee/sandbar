@@ -17,12 +17,14 @@ import (
 type setupOptions struct {
 	Check, ReplaceDefault bool
 	HTTPPort, HTTPSPort   *int
+	Machine               string
 }
 
 func setup(args []string, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet("setup", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	var options setupOptions
+	flags.StringVar(&options.Machine, "machine", "", "stable machine name")
 	flags.BoolVar(&options.Check, "check", false, "preview setup")
 	flags.BoolVar(&options.ReplaceDefault, "replace-default-site", false, "replace Caddy's stock welcome site")
 	httpPort := flags.Int("http-port", 80, "HTTP redirect port")
@@ -33,14 +35,20 @@ func setup(args []string, out, errOut io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("setup accepts flags only; use sandbar setup --help")
 	}
+	machineSet := false
 	flags.Visit(func(f *flag.Flag) {
 		switch f.Name {
+		case "machine":
+			machineSet = true
 		case "http-port":
 			options.HTTPPort = httpPort
 		case "https-port":
 			options.HTTPSPort = httpsPort
 		}
 	})
+	if machineSet && options.Machine == "" {
+		return errors.New("--machine requires a DNS label")
+	}
 	i, err := inspectInstallation()
 	if err != nil {
 		return err
@@ -110,10 +118,12 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 	if options.HTTPSPort != nil {
 		cfg.HTTPSPort = *options.HTTPSPort
 	}
-	if err := cfg.validate(); err != nil {
+	upgrade := cfg.Version < 3
+	cfg, err = upgradeMachineConfig(cfg, options.Machine)
+	if err != nil {
 		return err
 	}
-	if source == nil || options.HTTPPort != nil || options.HTTPSPort != nil {
+	if source == nil || upgrade || options.HTTPPort != nil || options.HTTPSPort != nil {
 		source, err = configBytes(cfg)
 		if err != nil {
 			return err
@@ -161,6 +171,7 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 	if top == nil {
 		fmt.Fprintln(out, "Create missing Caddyfile:", i.Config)
 	}
+	fmt.Fprintln(out, "Machine:", cfg.Machine)
 	fmt.Fprintln(out, "Ports: HTTP", cfg.HTTPPort, "HTTPS", cfg.HTTPSPort)
 	fmt.Fprintln(out, "Routes:", p.generatedPath())
 	fmt.Fprintln(out, "Admin socket:", p.file("admin.sock"))
@@ -421,7 +432,7 @@ func verifyDarwinSetupRoutes(p paths, c config) error {
 	if err := waitForInstalledStartup(p, c); err != nil {
 		return err
 	}
-	return verifySetupSites(p, c, c.Routes)
+	return verifySetupSites(p, c, c.localSites(true))
 }
 
 // Existing matching global port settings remain outside Sandbar's owned fragment.

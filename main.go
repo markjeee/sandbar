@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -58,10 +59,14 @@ func execute(args []string, out, errOut io.Writer) error {
 		return nil
 	}
 	command, rest := flags.Arg(0), flags.Args()[1:]
-	if command != "init" && command != "start" && command != "stop" && command != "trust" && command != "untrust" && command != "add" && command != "rm" && command != "ls" && command != "reload" && command != "status" && command != "setup" {
+	if command != "init" && command != "start" && command != "stop" && command != "trust" && command != "untrust" && command != "add" && command != "rm" && command != "ls" && command != "reload" && command != "status" && command != "setup" && command != "teleport" {
 		return fmt.Errorf("unknown command %q (use --help)", command)
 	}
-	if commandHelpRequested(rest) {
+	if command == "teleport" && commandHelpRequested(rest) {
+		fmt.Fprint(out, teleportHelp(rest))
+		return nil
+	}
+	if command != "teleport" && commandHelpRequested(rest) {
 		text, _ := helpText(command)
 		fmt.Fprint(out, text)
 		return nil
@@ -81,7 +86,7 @@ func execute(args []string, out, errOut io.Writer) error {
 		}
 		return setup(rest, out, errOut)
 	}
-	if command != "init" && command != "add" && command != "rm" && len(rest) != 0 {
+	if command != "init" && command != "add" && command != "rm" && command != "teleport" && len(rest) != 0 {
 		return fmt.Errorf("%s accepts no arguments", command)
 	}
 	paths, err := resolvePaths(*home)
@@ -90,9 +95,12 @@ func execute(args []string, out, errOut io.Writer) error {
 	}
 	if paths.installed != nil && paths.installed.ID == "homebrew-launchd-v1" {
 		switch command {
-		case "init", "start", "add", "rm", "reload":
+		case "init", "start", "add", "rm", "reload", "teleport":
 			return errors.New("migrate the Homebrew Caddy service with sandbar setup before changing installed routes or starting Caddy")
 		}
+	}
+	if command == "teleport" {
+		return executeTeleport(paths, rest, out, errOut)
 	}
 	if command == "init" {
 		return initialize(paths, rest, out, errOut)
@@ -120,7 +128,8 @@ func initialize(paths paths, args []string, out, errOut io.Writer) error {
 	flags.SetOutput(errOut)
 	httpPort := flags.Int("http-port", 80, "HTTP redirect port")
 	httpsPort := flags.Int("https-port", 443, "HTTPS port")
-	flags.Usage = func() { fmt.Fprint(out, topLevelHelp()) }
+	machine := flags.String("machine", "", "stable machine name")
+	flags.Usage = func() { text, _ := helpText("init"); fmt.Fprint(out, text) }
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -130,58 +139,74 @@ func initialize(paths paths, args []string, out, errOut io.Writer) error {
 	if flags.NArg() != 0 && flags.NArg() != 2 {
 		return errors.New("init accepts either no arguments or a hostname and upstream (use --help)")
 	}
-	cfg := config{Version: 2, HTTPPort: *httpPort, HTTPSPort: *httpsPort, Routes: []route{}}
-	if flags.NArg() == 2 {
-		cfg.Routes = append(cfg.Routes, route{flags.Arg(0), flags.Arg(1)})
-	}
-	if paths.installed == nil || !customInstalledPorts {
-		if err := cfg.validate(); err != nil {
-			return err
+	httpSet, httpsSet, machineSet := false, false, false
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "machine":
+			machineSet = true
+		case "http-port":
+			httpSet = true
+		case "https-port":
+			httpsSet = true
 		}
-	}
-	if paths.installed != nil && !customInstalledPorts && (cfg.HTTPPort != 80 || cfg.HTTPSPort != 443) {
-		return errors.New("installed Sandbar uses ports 80 and 443; use --home for development ports")
+	})
+	if machineSet && *machine == "" {
+		return errors.New("--machine requires a DNS label")
 	}
 	return withLock(paths, func() error {
 		if err := recoverTransaction(paths, errOut); err != nil {
 			return err
 		}
-		existing, err := readConfig(paths.config)
-		if err == nil {
-			if paths.installed != nil && customInstalledPorts {
-				conflict := false
-				flags.Visit(func(f *flag.Flag) {
-					switch f.Name {
-					case "http-port":
-						conflict = conflict || cfg.HTTPPort != existing.HTTPPort
-					case "https-port":
-						conflict = conflict || cfg.HTTPSPort != existing.HTTPSPort
-					}
-				})
-				if conflict {
-					return errors.New("change installed macOS ports with sandbar setup --http-port <port> --https-port <port>")
-				}
-				cfg.HTTPPort, cfg.HTTPSPort = existing.HTTPPort, existing.HTTPSPort
-				if err := cfg.validate(); err != nil {
-					return err
-				}
-			}
-			if existing.HTTPPort != cfg.HTTPPort || existing.HTTPSPort != cfg.HTTPSPort || !reflect.DeepEqual(existing.Routes, cfg.Routes) {
-				return fmt.Errorf("configuration already exists with different settings: %s", paths.config)
-			}
-			fmt.Fprintln(out, "Configuration already exists:", paths.config)
-			return nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
+		previous, err := readOptional(paths.config)
+		if err != nil {
 			return err
 		}
-		if paths.installed != nil && customInstalledPorts {
-			if cfg.HTTPPort != 80 || cfg.HTTPSPort != 443 {
-				return errors.New("select installed macOS ports with sandbar setup --http-port <port> --https-port <port>")
-			}
-			if err := cfg.validate(); err != nil {
+		cfg := config{Version: 2, HTTPPort: *httpPort, HTTPSPort: *httpsPort, Routes: []route{}}
+		if previous != nil {
+			existing, err := decodeConfig(bytes.NewReader(previous))
+			if err != nil {
 				return err
 			}
+			if httpSet && *httpPort != existing.HTTPPort || httpsSet && *httpsPort != existing.HTTPSPort {
+				if paths.installed != nil && customInstalledPorts {
+					return errors.New("change installed macOS ports with sandbar setup --http-port <port> --https-port <port>")
+				}
+				return fmt.Errorf("configuration already exists with different settings: %s", paths.config)
+			}
+			cfg = existing
+			if flags.NArg() == 2 {
+				requested := config{Version: 2, HTTPPort: cfg.HTTPPort, HTTPSPort: cfg.HTTPSPort, Routes: []route{{flags.Arg(0), flags.Arg(1)}}}
+				if err := requested.validate(); err != nil {
+					return err
+				}
+				if !reflect.DeepEqual(existing.Routes, requested.Routes) {
+					return fmt.Errorf("configuration already exists with different settings: %s", paths.config)
+				}
+			}
+			if paths.installed != nil && existing.Version < 3 {
+				return errors.New("upgrade installed machine identity with sandbar setup")
+			}
+		} else if flags.NArg() == 2 {
+			cfg.Routes = append(cfg.Routes, route{flags.Arg(0), flags.Arg(1)})
+		}
+		previousVersion := cfg.Version
+		cfg, err = upgradeMachineConfig(cfg, *machine)
+		if err != nil {
+			return err
+		}
+		if paths.installed != nil && (!customInstalledPorts || previous == nil) && (cfg.HTTPPort != 80 || cfg.HTTPSPort != 443) {
+			return errors.New("select installed ports with sandbar setup; use --home for development ports")
+		}
+		if previous != nil {
+			if previousVersion == 3 {
+				fmt.Fprintln(out, "Configuration already exists:", paths.config)
+				return nil
+			}
+			if err := publishConfig(paths, previous, cfg, true, out, errOut); err != nil {
+				return err
+			}
+			fmt.Fprintln(out, "Configuration upgraded:", paths.config)
+			return nil
 		}
 		if err := createSelectedConfig(paths, cfg); err != nil {
 			return err

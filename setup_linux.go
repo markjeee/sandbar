@@ -27,6 +27,7 @@ func exportServiceRoot(p paths, undo *setupUndo) error {
 
 type setupOptions struct {
 	User                        string
+	Machine                     string
 	Check, ReplaceDefault       bool
 	MigrateConfig, MigrateState string
 }
@@ -35,6 +36,7 @@ func setup(args []string, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet("setup", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	var options setupOptions
+	flags.StringVar(&options.Machine, "machine", "", "stable machine name")
 	flags.StringVar(&options.User, "user", "", "account to grant Caddy access")
 	flags.BoolVar(&options.Check, "check", false, "preview setup")
 	flags.BoolVar(&options.ReplaceDefault, "replace-default-site", false, "replace Caddy's stock welcome site")
@@ -45,6 +47,15 @@ func setup(args []string, out, errOut io.Writer) error {
 	}
 	if flags.NArg() != 0 {
 		return errors.New("setup accepts flags only; use sandbar setup --help")
+	}
+	machineSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "machine" {
+			machineSet = true
+		}
+	})
+	if machineSet && options.Machine == "" {
+		return errors.New("--machine requires a DNS label")
 	}
 	if options.User == "" {
 		return errors.New("setup requires --user <name>")
@@ -121,7 +132,12 @@ func setup(args []string, out, errOut io.Writer) error {
 		cfg = migration.Config
 		source = migration.Source
 	}
-	if source == nil {
+	upgrade := cfg.Version < 3
+	cfg, err = upgradeMachineConfig(cfg, options.Machine)
+	if err != nil {
+		return err
+	}
+	if source == nil || upgrade {
 		source, err = configBytes(cfg)
 		if err != nil {
 			return err
@@ -151,6 +167,7 @@ func setup(args []string, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	fmt.Fprintln(out, "Machine:", cfg.Machine)
 	fmt.Fprintln(out, "Integration:", i.ID)
 	fmt.Fprintln(out, "Caddy:", i.Binary, "as", i.Account, "through", i.Unit)
 	fmt.Fprintln(out, "Access for:", options.User, "through group sandbar (all Caddy routes and Caddy-readable files)")
@@ -517,5 +534,5 @@ func appendOptional(data []byte) []byte {
 }
 
 func verifySetupRoutes(p paths, c config) error {
-	return verifySetupSites(p, c, append([]route{{Hostname: "sandbar.localhost"}}, c.Routes...))
+	return verifySetupSites(p, c, c.localSites(true))
 }
