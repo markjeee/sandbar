@@ -17,6 +17,7 @@ type serviceState struct {
 	State      string
 	Boot       string
 	Diagnostic string
+	Sockets    string
 }
 
 type serviceOperations interface {
@@ -38,6 +39,7 @@ type installation struct {
 	Account  string            `json:"account"`
 	UID      int               `json:"uid"`
 	GID      int               `json:"gid"`
+	CLI      string            `json:"cli,omitempty"`
 	Log      string            `json:"log,omitempty"`
 	GroupID  int               `json:"group_id"`
 	Service  serviceOperations `json:"-"`

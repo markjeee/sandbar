@@ -51,6 +51,41 @@ func setup(args []string, out, errOut io.Writer) error {
 // The route verifier is replaced only by setup tests whose service commands are simulated.
 func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify func(paths, config) error) error {
 	i := p.installed
+	priorService := i.Service
+	if i.ID == sandbarLaunchdID {
+		cli, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		cli, err = filepath.EvalSymlinks(cli)
+		if err != nil {
+			return err
+		}
+		selected := *i
+		selected.CLI = cli
+		if service, ok := priorService.(*launchdService); ok {
+			selected.Service = &launchdService{installation: &selected, old: service.old}
+			p = installedPaths(&selected)
+			i = &selected
+		}
+	}
+	if i.ID == "homebrew-launchd-v1" {
+		cli, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		cli, err = filepath.EvalSymlinks(cli)
+		if err != nil {
+			return err
+		}
+		selected := newLaunchdInstallation(i, cli)
+		selected.Service = &launchdService{installation: selected, old: i.Service.(*homebrewService)}
+		if err := checkNewLaunchdTarget(selected); err != nil {
+			return err
+		}
+		p = installedPaths(selected)
+		i = selected
+	}
 	if err := checkSelectedCaddy(p, caddyEnv(p), errOut); err != nil {
 		return err
 	}
@@ -85,7 +120,7 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 		}
 	}
 	expected := []setupSnapshot{}
-	for _, path := range []string{i.Config, p.config, p.generatedPath(), i.Globals} {
+	for _, path := range []string{i.Config, p.config, p.generatedPath(), i.Globals, p.file("setup.json"), launchdTemplate(i), i.Fragment} {
 		data, err := readOptional(path)
 		if err != nil {
 			return err
@@ -115,7 +150,7 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 	if err != nil {
 		return err
 	}
-	prior, err := i.Service.Inspect()
+	prior, err := priorService.Inspect()
 	if err != nil {
 		return err
 	}
@@ -129,7 +164,15 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 	fmt.Fprintln(out, "Ports: HTTP", cfg.HTTPPort, "HTTPS", cfg.HTTPSPort)
 	fmt.Fprintln(out, "Routes:", p.generatedPath())
 	fmt.Fprintln(out, "Admin socket:", p.file("admin.sock"))
-	fmt.Fprintln(out, "Login startup:", prior.Boot, "→ register and start the Homebrew user service")
+	fmt.Fprintln(out, "Login startup:", prior.Boot, "→ register and start the Sandbar user LaunchAgent")
+	if i.ID == sandbarLaunchdID {
+		fmt.Fprintln(out, "Service ownership: sh.brew.caddy →", i.Unit)
+		fmt.Fprintln(out, "Sandbar executable:", i.CLI)
+		fmt.Fprintln(out, "Job template:", launchdTemplate(i))
+		fmt.Fprintln(out, "Login copy:", i.Fragment)
+		fmt.Fprintln(out, "Sockets: HTTP TCP", cfg.HTTPPort, "HTTPS TCP/UDP", cfg.HTTPSPort, "IPv6", ipv6)
+		fmt.Fprintln(out, "Retained Caddy storage:", i.Storage)
+	}
 	fmt.Fprintln(out, "Backups:", p.file("backups"))
 	if prior.State == "active" || prior.State == "failed" {
 		fmt.Fprintln(out, "Service action: one setup stop/start to replace the active or failed job")
@@ -140,12 +183,12 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 	fmt.Fprintln(out, "Welcome:", cfg.routeURL("sandbar.localhost"))
 	fmt.Fprintln(out, "Trust is separate: sandbar trust. Caddy starts at login, after user login.")
 	if options.Check {
-		return nil
+		return validateDarwinPreview(p, cfg, composition.Candidate, socketPlan{HTTPPort: cfg.HTTPPort, HTTPSPort: cfg.HTTPSPort, IPv6: ipv6}, out, errOut)
 	}
-	return applyDarwinSetup(p, cfg, source, []byte(routes), globals, composition, expected, prior, out, errOut, verify)
+	return applyDarwinSetup(p, cfg, source, []byte(routes), globals, composition, expected, prior, priorService, socketPlan{HTTPPort: cfg.HTTPPort, HTTPSPort: cfg.HTTPSPort, IPv6: ipv6}, out, errOut, verify)
 }
 
-func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, composition installedComposition, expected []setupSnapshot, prior serviceState, out, errOut io.Writer, verify func(paths, config) error) (result error) {
+func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, composition installedComposition, expected []setupSnapshot, prior serviceState, priorService serviceOperations, plan socketPlan, out, errOut io.Writer, verify func(paths, config) error) (result error) {
 	i := p.installed
 	if err := checkSetupSnapshots(expected); err != nil {
 		return err
@@ -167,6 +210,27 @@ func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, compo
 		return err
 	}
 	undo := setupUndo{Dir: backupDir, Prior: prior, Expected: expected}
+	priorInstallation := i
+	switch service := priorService.(type) {
+	case *homebrewService:
+		priorInstallation = service.installation
+	case *launchdService:
+		priorInstallation = service.installation
+	}
+	undo.PriorInstallation = priorInstallation.identity()
+	if info, err := os.Lstat(priorInstallation.Fragment); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("setup refuses non-regular service job: %s", priorInstallation.Fragment)
+		}
+		data, err := os.ReadFile(priorInstallation.Fragment)
+		if err != nil {
+			return err
+		}
+		stat := info.Sys().(*syscall.Stat_t)
+		undo.PriorJob = &setupBackup{Path: priorInstallation.Fragment, Data: data, Mode: fileAccessMode(info.Mode()), UID: int(stat.Uid), GID: int(stat.Gid)}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if err := undo.save(); err != nil {
 		return err
 	}
@@ -176,14 +240,22 @@ func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, compo
 		if result == nil {
 			return
 		}
-		rollbackErr := undo.restore()
-		if serviceChanged {
-			rollbackErr = errors.Join(rollbackErr, restoreDarwinService(i.Service, prior, out, errOut))
+		var rollbackErr error
+		if serviceChanged && i.ID == sandbarLaunchdID {
+			rollbackErr = unloadSetupLaunchd(i)
+			if rollbackErr != nil {
+				result = errors.Join(result, rollbackErr, fmt.Errorf("setup rollback cannot restore live service files; backups at %s", backupDir))
+				return
+			}
+		}
+		rollbackErr = undo.restore()
+		if serviceChanged && rollbackErr == nil {
+			rollbackErr = restoreDarwinService(priorService, prior, out, errOut)
 		}
 		result = errors.Join(result, rollbackErr, fmt.Errorf("setup failed; inspect service state and backups at %s/backup.json", backupDir))
 	}()
 	for _, path := range []string{filepath.Dir(p.config), p.state, p.file("backups"), p.workDir(), p.file("routes"), p.file("admin"), p.file("validation")} {
-		if err := undo.directory(path, 0700, i.UID, i.GID); err != nil {
+		if err := darwinSetupDirectory(&undo, path, i); err != nil {
 			return err
 		}
 	}
@@ -216,7 +288,15 @@ func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, compo
 	if err := checkInstalledAdapted(adapted, cfg, address); err != nil {
 		return err
 	}
-	if err := i.Service.Validate(out, errOut); err != nil {
+	if i.ID == sandbarLaunchdID {
+		runtime, err := convertSocketRuntime(adapted, plan)
+		if err != nil {
+			return err
+		}
+		if err := validateLaunchdRuntime(p, runtime, out, errOut); err != nil {
+			return err
+		}
+	} else if err := i.Service.Validate(out, errOut); err != nil {
 		return err
 	}
 	if err := verifyInputManifest(inputs); err != nil {
@@ -224,6 +304,27 @@ func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, compo
 	}
 	if err := checkSetupSnapshots(expected); err != nil {
 		return err
+	}
+	serviceChanged = true
+	if prior.State == "active" || prior.State == "failed" || prior.Boot == "enabled" {
+		if _, ok := priorService.(*launchdService); ok {
+			if err := unloadSetupLaunchd(i); err != nil {
+				return err
+			}
+		} else {
+			pid := ""
+			if old, ok := priorService.(*homebrewService); ok {
+				pid = loadedLaunchdPID(old.installation)
+			}
+			if err := priorService.Control("stop", out, errOut); err != nil {
+				return err
+			}
+			if old, ok := priorService.(*homebrewService); ok {
+				if err := waitLaunchdRemoval(old.installation, launchdShutdownLimit, pid); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	for _, file := range []struct {
 		path string
@@ -233,11 +334,37 @@ func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, compo
 			return err
 		}
 	}
-	serviceChanged = true
-	if prior.State == "active" || prior.State == "failed" {
-		if err := i.Service.Control("stop", out, errOut); err != nil {
+	_, manifest, err := stageInstalledCandidate(i.Config, i.Globals, p.generatedPath(), routes)
+	if err != nil {
+		return err
+	}
+	record := setupRecord{Identity: i.identity(), Manifest: manifest}
+	if i.ID == sandbarLaunchdID {
+		record.SocketPlan = &plan
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	if i.ID == sandbarLaunchdID {
+		for _, dir := range []string{filepath.Dir(launchdTemplate(i)), filepath.Dir(i.Fragment)} {
+			if err := darwinSetupDirectory(&undo, dir, i); err != nil {
+				return err
+			}
+		}
+		job, err := renderLaunchdJob(i, plan)
+		if err != nil {
 			return err
 		}
+		if err := undo.write(launchdTemplate(i), job, 0600, -1, -1); err != nil {
+			return err
+		}
+		if err := undo.write(i.Fragment, job, 0600, -1, -1); err != nil {
+			return err
+		}
+	}
+	if err := undo.write(p.file("setup.json"), append(data, '\n'), 0600, -1, -1); err != nil {
+		return err
 	}
 	if err := i.Service.Control("start", out, errOut); err != nil {
 		return err
@@ -248,23 +375,30 @@ func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, compo
 	if err := verify(p, cfg); err != nil {
 		return err
 	}
-	_, manifest, err := stageInstalledCandidate(i.Config, i.Globals, p.generatedPath(), routes)
-	if err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(setupRecord{Identity: i.identity(), Manifest: manifest}, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := undo.write(p.file("setup.json"), append(data, '\n'), 0600, -1, -1); err != nil {
-		return err
-	}
 	fmt.Fprintln(out, "Setup complete. Run sandbar status.")
 	fmt.Fprintln(out, "Welcome:", cfg.routeURL("sandbar.localhost"))
 	return nil
 }
 
 func restoreDarwinService(service serviceOperations, prior serviceState, out, errOut io.Writer) error {
+	if selected, ok := service.(*launchdService); ok {
+		// Undo already restored the prior login copy. Bootstrap the private template
+		// only if a job existed, including a job without login registration.
+		state, err := selected.Inspect()
+		if err != nil {
+			return err
+		}
+		if prior.State != "active" && prior.State != "failed" {
+			return nil
+		}
+		if state.Sockets != "released" {
+			return errors.New("cannot restore the prior launchd job while another job is loaded")
+		}
+		if err := launchdControl("bootstrap", launchdDomain(selected.installation), launchdTemplate(selected.installation)); err != nil {
+			return err
+		}
+		return nil
+	}
 	if prior.State == "active" {
 		if prior.Boot == "enabled" {
 			return errors.Join(service.Control("start", out, errOut), service.Control("reload", out, errOut))
@@ -327,4 +461,77 @@ func renderDarwinGlobals(p paths, c config, top []byte, address string) ([]byte,
 		globals = strings.Replace(globals, fmt.Sprintf("%s %d\n", token.text, selected), "", 1)
 	}
 	return []byte(globals), nil
+}
+
+func validateDarwinPreview(p paths, c config, candidate []byte, plan socketPlan, out, errOut io.Writer) error {
+	file, err := os.CreateTemp("", "sandbar-setup-preview-*.Caddyfile")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.Write(candidate); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	data, err := adaptCaddyfile(p, file.Name(), errOut)
+	if err != nil {
+		return err
+	}
+	address, err := p.adminAddress()
+	if err != nil {
+		return err
+	}
+	if err := checkInstalledAdapted(data, c, address); err != nil {
+		return err
+	}
+	if p.installed.ID == sandbarLaunchdID {
+		data, err = convertSocketRuntime(data, plan)
+		if err != nil {
+			return err
+		}
+	}
+	// Validation can create a CA. Keep preview state in temporary storage.
+	scratch, err := os.MkdirTemp("", "sandbar-preview-storage-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(scratch)
+	env := append([]string{}, caddyEnv(p)...)
+	for n, item := range env {
+		if strings.HasPrefix(item, "HOME=") {
+			env[n] = "HOME=" + scratch
+		}
+		if strings.HasPrefix(item, "XDG_DATA_HOME=") {
+			env[n] = "XDG_DATA_HOME=" + scratch
+		}
+	}
+	return invokeSelectedCaddy(p, env, bytes.NewReader(data), out, errOut, "validate", "--config", "-")
+}
+func unloadSetupLaunchd(i *installation) error {
+	_, err := launchdOutput("/bin/launchctl", "print", launchdTarget(i))
+	if err != nil {
+		if launchdJobMissing(err, i.Unit) {
+			return nil
+		}
+		return err
+	}
+	pid := loadedLaunchdPID(i)
+	if err := launchdControl("bootout", launchdTarget(i)); err != nil {
+		return err
+	}
+	return waitLaunchdRemoval(i, launchdShutdownLimit, pid)
+}
+
+func darwinSetupDirectory(undo *setupUndo, path string, i *installation) error {
+	gid := i.GID
+	if info, err := os.Lstat(path); err == nil {
+		gid = int(info.Sys().(*syscall.Stat_t).Gid)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// macOS private directories need no group transfer. Preserve existing groups.
+	return undo.directory(path, 0700, i.UID, gid)
 }

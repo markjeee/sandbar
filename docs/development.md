@@ -15,7 +15,20 @@ Sandbar is distributed under the [MIT license](../LICENSE).
 Use Linux amd64 or macOS arm64 with Go 1.27.2 or later and a native C compiler for race checks.
 Install Caddy v2.11.7 or a later v2 release separately.
 Linux integration needs `ss` from `iproute2`. macOS integration needs `lsof` and native process inspection tools.
-macOS installed use needs Homebrew's standard current-user Caddy service. Private development does not register that service.
+macOS source builds require cgo, clang, and the macOS SDK from Xcode or Command Line Tools.
+Run `xcode-select --install` if these tools are missing. Scripts check both clang and the SDK before building.
+Homebrew supplies installed Caddy. Sandbar owns its current-user LaunchAgent after explicit setup.
+Private development does not register a LaunchAgent.
+macOS integration also requires curl with HTTP/2 and HTTP/3 support:
+
+```sh
+brew install curl
+export PATH="$(brew --prefix curl)/bin:$PATH"
+curl --version
+```
+
+The Features line must include `HTTP2` and `HTTP3`. Apple's system curl does not satisfy this test prerequisite.
+This curl is a test client. Installed Sandbar needs no curl, Go, clang, Python, or extra bridge executable.
 The curl proof also needs Python 3 and curl.
 Run Mac builds and tests natively. Keep Linux builds and tests on Linux CI or another Linux machine.
 
@@ -61,7 +74,10 @@ sh ./install.sh
 To build an executable in the checkout without installing:
 
 ```sh
-CGO_ENABLED=0 go build -o sandbar .
+# macOS arm64, with SDK clang available
+CGO_ENABLED=1 CC="$(xcrun --find clang)" SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" go build -o sandbar .
+# Linux amd64, on Linux only
+# CGO_ENABLED=0 go build -o sandbar .
 ```
 
 Use `sh ./install.sh` to build and install the checkout version for `sandbar` commands in `PATH`.
@@ -143,8 +159,11 @@ scripts/check
 scripts/check --integration
 ```
 
-Both commands check formatting, shell syntax, installers, module consistency, vet, Staticcheck, shuffled race tests, fuzzing, known vulnerabilities, and static builds.
-The second also runs real Caddy routing and setup configuration acceptance.
+Both commands check formatting, shell syntax, installers, module consistency, vet, Staticcheck, shuffled race tests, fuzzing, known vulnerabilities, and native builds.
+macOS builds include cgo. Linux release builds retain `CGO_ENABLED=0`.
+The second also runs real Caddy routing, setup configuration acceptance, and macOS inherited-listener checks.
+macOS integration rejects a PATH curl without HTTP/2 and HTTP/3 support. CI installs Homebrew curl and checks the same features.
+The high-port handoff tests supply TCP/UDP descriptors directly and force all three HTTPS protocols with isolated roots.
 It uses `ss` on Linux or machine-readable `lsof` output on macOS for independent listener evidence.
 CI uses the same command with `--integration`, with a native architecture assertion for each platform.
 Record local macOS, macOS CI, and Linux CI results separately against the same revision.
@@ -178,7 +197,7 @@ Use these three layers alongside the persistent manual development sandbox:
 | --- | --- | --- |
 | Automated integration | Native Sandbar, real Caddy and backends, verified TLS | Fresh temporary homes, high ports, test-owned cleanup |
 | Automated setup | Actual setup logic, real `caddy adapt` and `caddy validate`, simulated service operations | Temporary installation paths and isolated Caddy storage |
-| Installation acceptance | Installed Sandbar and the actual Homebrew user service | Normal installed paths, when the Developer requests installation |
+| Installation acceptance | Installed Sandbar and its actual user LaunchAgent | Normal installed paths, when the Developer requests installation |
 
 Setup fixtures cover preview, fresh and repeated setup, conflicts, backups, ordinary rollback, and preserved unrelated configuration.
 They validate default and explicitly selected installed ports without binding privileged ports or registering the real service.
@@ -191,15 +210,16 @@ No disposable macOS VM or spare Mac is required for development completion.
 Run this checklist only when installation and its service changes are requested.
 Record each result separately as pending or verified. Do not infer it from mocks or private-router tests.
 
-1. Preview `sandbar setup --check --http-port 8080 --https-port 8443` and review paths and conflicts.
-2. Apply `sandbar setup --http-port 8080 --https-port 8443` as the normal user. Verify the Homebrew service and loopback listeners on 8080/8443.
-3. Check `http://sandbar.localhost:8080` redirects to `https://sandbar.localhost:8443`. Confirm Sandbar has no listeners on 80/443.
-4. Start a generic backend and verify a configured app route with the selected root and normal TLS verification.
-5. Change and remove routes while Caddy runs. Confirm its PID stays unchanged and unrelated sites keep working.
-6. Stop and start through Sandbar. Confirm listener closure, restored routes and ports, unchanged root fingerprint, and renewed login registration. Repeat setup without port options and verify retained ports.
-7. After explicit `sandbar trust`, follow the [macOS Chrome checklist](browser-trust.md#macos-browser-acceptance) in a fresh browser process.
-8. Verify startup after an actual later login. Registration alone is insufficient. Do not force logout during development.
-9. Run exact-root trust removal only when separately requested, then verify certificate rejection in a fresh Chrome process with Caddy running.
+1. Record the original CA fingerprint, routes, and service state. Preview `sandbar setup --check --http-port 80 --https-port 443`.
+2. Review job paths, socket plan, backups, conflicts, and service transfer. Apply `sandbar setup --http-port 80 --https-port 443` as the normal user.
+3. Verify `local.sandbar.caddy` owns TCP 80, TCP 443, and UDP 443 on both available loopback families. Confirm Caddy runs as your user.
+4. Check HTTP 308 redirects with preserved path/query and HTTPS port 443. Force verified HTTP/1.1, HTTP/2, and HTTP/3 with curl. Check HTTP/3 advertisement.
+5. Start a generic backend and verify a configured app route with the selected root and normal TLS verification.
+6. Change and remove routes while Caddy runs. Confirm its PID stays unchanged and unrelated sites keep working.
+7. Stop and start through Sandbar. Confirm TCP/UDP listener closure and that traffic cannot restart the stopped job. Verify restored routes, ports, CA fingerprint, and login registration. Repeat setup without port options and verify retained ports.
+8. Keep existing trust unchanged. Follow the [macOS Chrome checklist](browser-trust.md#macos-browser-acceptance) in a fresh browser process.
+9. Verify startup after an actual later login. Registration alone is insufficient. Do not force logout during development.
+10. Run exact-root trust removal only when separately requested, then verify certificate rejection in a fresh Chrome process with Caddy running.
 
 Keep real service, browser trust, trust removal, and actual new-login acceptance pending until checked.
 Do not remove the installed CA as automatic test cleanup.

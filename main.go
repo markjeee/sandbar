@@ -32,6 +32,9 @@ func run(args []string, out, errOut io.Writer) int {
 }
 
 func execute(args []string, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "_launchd-caddy" {
+		return launchdCaddyBridge(args[1:], errOut)
+	}
 	flags := flag.NewFlagSet("sandbar", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	home := flags.String("home", os.Getenv("SANDBAR_HOME"), "private Sandbar home")
@@ -84,6 +87,12 @@ func execute(args []string, out, errOut io.Writer) error {
 	paths, err := resolvePaths(*home)
 	if err != nil {
 		return err
+	}
+	if paths.installed != nil && paths.installed.ID == "homebrew-launchd-v1" {
+		switch command {
+		case "init", "start", "add", "rm", "reload":
+			return errors.New("migrate the Homebrew Caddy service with sandbar setup before changing installed routes or starting Caddy")
+		}
 	}
 	if command == "init" {
 		return initialize(paths, rest, out, errOut)

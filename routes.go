@@ -114,6 +114,16 @@ func changeRoutes(p paths, command string, args []string, out, errOut io.Writer)
 	if err != nil {
 		return err
 	}
+	if p.installed != nil && p.installed.ID == "sandbar-launchd-v1" {
+		record, err := readSetupRecord(p)
+		if err != nil {
+			return err
+		}
+		if record.SocketPlan == nil {
+			return errors.New("missing launchd socket plan")
+		}
+		ipv6 = record.SocketPlan.IPv6
+	}
 	content, err := renderCaddyfile(c, p, ipv6)
 	if err != nil {
 		return err

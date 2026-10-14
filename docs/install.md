@@ -2,7 +2,7 @@
 
 The checkout supports Linux amd64 and macOS arm64. Published beta.2 supports Linux amd64 only.
 Linux uses apt-packaged Caddy with systemd, Polkit, and sudo. Ubuntu 24.04 is its acceptance target.
-macOS uses native Homebrew Caddy and the current user's launchd service.
+macOS uses native Homebrew Caddy and one Sandbar-managed current-user LaunchAgent.
 Install prerequisites separately. Sandbar packages need no Go runtime.
 Other Caddy packages, Intel Macs, and Windows are outside these integrations.
 Automated native checks establish development readiness. Real macOS installation checks remain separate.
@@ -32,7 +32,10 @@ Use checkout installation until a native release is published. Local candidates 
 
 ## Checkout installation
 
-Use the Go version declared in `go.mod`. Run the installer from a checkout:
+Use the Go version declared in `go.mod`. macOS also requires clang and the macOS SDK from Xcode or Command Line Tools.
+Run `xcode-select --install` if either prerequisite is missing. Source builds use cgo on macOS and remain static on Linux.
+Downloaded packages need no compiler, Go, Python, or separate helper executable.
+Run the installer from a checkout:
 
 ```sh
 sh ./install.sh
@@ -61,75 +64,127 @@ The installer removes its temporary files when it exits.
 
 ## Connect Homebrew Caddy on macOS
 
-Use a native arm64 Homebrew installation with Caddy v2.11.7 or a later v2 release.
-Sandbar checks formula paths, the service command, storage environment, and existing launchd job before changing configuration.
-A root-managed service or incompatible job must be resolved separately. Sandbar does not replace it or start a fallback router.
-A standard user service need not be registered before setup.
+Use native arm64 Homebrew Caddy v2.11.7 or a later v2 release.
+Homebrew supplies the package. Sandbar manages the user LaunchAgent `local.sandbar.caddy` after explicit setup.
+Sandbar verifies executable paths, configuration, storage, and service identity before changes.
+An unregistered installation or verified standard Homebrew user job is supported.
+A root-managed, foreign custom, or competing job must be resolved separately. Sandbar does not stop unrelated services or start a fallback router.
 
 Run as the current user, without sudo:
 
 ```sh
-sandbar setup --check --http-port 8080 --https-port 8443
-sandbar setup --http-port 8080 --https-port 8443
+sandbar setup --check --http-port 80 --https-port 443
+sandbar setup --http-port 80 --https-port 443
 ```
 
-Fresh setup still defaults to HTTP 80 and HTTPS 443 when no port options are supplied.
-A macOS user service can fail to bind privileged ports with `permission denied`.
-Use the explicit high ports above in that case. Sandbar does not add a privileged service or port-forwarding rules.
-An omitted port option retains its saved value, or uses its fresh default if no value exists.
-Explicit choices persist in `config.json` for later start, route changes, reload, and repeated setup without port options.
+Launchd opens HTTP TCP and HTTPS TCP/UDP sockets on `127.0.0.1` and available `::1`.
+Caddy inherits these sockets and runs as your user. HTTP/1.1, HTTP/2, and HTTP/3 share the selected HTTPS port.
+No root Caddy process, system LaunchDaemon, packet-filter rule, separate helper, or persistent Sandbar process is installed.
+Use Sandbar for service commands after setup. Do not enable `brew services start caddy` alongside the Sandbar job.
+Homebrew remains responsible for package installation and upgrades.
+
+Fresh setup defaults to HTTP 80 and HTTPS 443. Existing installations keep saved ports when options are omitted.
+For example, migration without flags retains saved 8080/8443. Moving to 80/443 requires the explicit flags above.
+Custom ports remain available through `--http-port 8080 --https-port 8443`.
+Selected ports persist for start, route changes, reload, and repeated setup.
 Ports must be valid, distinct, and different from app backend ports.
-Caddy HTTP/HTTPS port settings affect the shared service. Setup rejects conflicting existing explicit settings instead of replacing them.
-Review unrelated sites before selecting these settings.
+Changing the socket plan requires setup. Reload cannot replace launchd's bound sockets.
+Caddy HTTP/HTTPS settings affect shared configuration. Setup rejects conflicting explicit settings rather than replacing them.
 
 Do not pass `--home` or set `SANDBAR_HOME` during setup.
-Preview changes no files, services, or trust stores.
-It reports application paths, planned Caddyfile changes, backups, service actions, login startup, and conflicts.
-Review conflicts before applying. Setup does not accept Linux `--user`, `--migrate-config`, or `--migrate-state` options.
+Preview changes no files, services, sockets, or trust stores.
+It reports old and new job labels, executable paths, selected sockets, job files, retained storage, backups, service actions, and conflicts.
+Review the preview before applying. macOS does not accept Linux `--user`, `--migrate-config`, or `--migrate-state` options.
+Binary installation alone does not migrate an existing Homebrew service.
+The new CLI retains inspection and shutdown for an old setup. Mutations that need the new integration direct you to setup.
 
-Setup creates a missing `<Homebrew prefix>/etc/Caddyfile` or preserves supported unrelated content in an existing file.
-`--replace-default-site` authorizes only a recognized stock welcome block. It never authorizes replacement of custom sites.
-Setup validates the complete candidate before activation and backs up changed files.
-Repeated matching setup preserves routes, CA identity, and single owned imports.
-Ordinary errors restore prior files, running state, and service registration where safe.
+Setup creates a missing `<Homebrew prefix>/etc/Caddyfile` and preserves supported unrelated content.
+`--replace-default-site` authorizes only a recognized stock welcome block. It never authorizes custom-site replacement.
+Setup validates the complete runtime configuration before stopping the verified old Homebrew job.
+Backups include changed files, prior job registration, and running state.
+Setup waits for old-job removal before registering the replacement. It does not repeatedly retry activation.
+Repeated matching setup preserves routes, CA identity, selected ports, and one owned job.
+Ordinary failures unload the new job before restoring prior files, registration, and running state where safe.
 Conflicting external edits remain intact. Failures report backup paths and unresolved restoration steps.
 
-Setup and installed `start` use `brew services start caddy`, registering startup for this user's login.
-Installed `stop` uses `brew services stop caddy`, stopping all Caddy routes and removing login registration.
-A later `sandbar start` registers it again. This user service does not provide boot-before-login operation.
-Registration alone does not prove that a later login starts Caddy.
-No Sandbar daemon, system LaunchDaemon, group access grant, or Linux policy is installed.
+`sandbar start` validates committed configuration and restores the saved job and login registration when absent.
+`sandbar reload` applies validated routes without replacing the job or Caddy process.
+`sandbar stop` unloads the job, releases TCP/UDP sockets, and removes login registration.
+Stop affects every route the selected Caddy serves, including unrelated sites. Requests cannot reactivate a successfully stopped job.
+Stop retains the private job template, configuration, certificates, and trust. A later start restores registration.
+This user service does not run before login. Registration alone does not prove startup after an actual later login.
 
-The installed layout is:
+The default installed layout is:
 
 ```text
 /usr/local/bin/sandbar                         # Regular standalone executable
 ~/Library/Application Support/sandbar/
 ├── config.json                               # App list
-└── state/                                    # Private runtime files and setup backups
+└── state/
+    ├── setup.json                            # Accepted installation and socket plan
+    ├── launchd/caddy.plist                    # Private restart template
+    └── backups/setup-<id>/backup.json         # Setup rollback record
+~/Library/LaunchAgents/local.sandbar.caddy.plist # Login registration copy
 ```
 
-Owned directories use `0700`, and private files and the control socket permit only this user.
+A custom `--bin-dir` remains supported. Setup records the verified absolute CLI path for the job.
+Moving that executable or changing its installation identity requires explicit setup reconciliation.
+Owned directories use `0700`. Private files and the control socket permit only this user.
 The Homebrew Caddyfile remains at `<prefix>/etc/Caddyfile`.
-Caddy storage remains at `<prefix>/var/lib/caddy`, including its `sandbar` authority and unrelated CAs.
-Sandbar reads Caddy's original public root at `<verified Caddy storage>/pki/authorities/sandbar/root.crt`.
-A typical arm64 Homebrew path is `/opt/homebrew/var/lib/caddy/pki/authorities/sandbar/root.crt`.
-Use the root path printed by Sandbar for your verified installation.
-Setup checks, status probes, and untrust use this original file. Sandbar creates no copy or symlink in its state directory.
-Service logs use `<prefix>/var/log/caddy.log`. Sandbar reports the verified path.
+Caddy storage remains at `<prefix>/var/lib/caddy`, including the `sandbar` authority and unrelated CAs.
+Sandbar reads the original public root at `<verified Caddy storage>/pki/authorities/sandbar/root.crt`.
+A typical arm64 path is `/opt/homebrew/var/lib/caddy/pki/authorities/sandbar/root.crt`.
+Use the root path printed by Sandbar. Setup, status probes, and untrust use this original file without a state copy or symlink.
+Service logs remain at `<prefix>/var/log/caddy.log`. Sandbar reports the verified path.
 
-With the selected ports above, open `https://sandbar.localhost:8443` after setup.
-`http://sandbar.localhost:8080` redirects to that HTTPS URL, including port 8443.
-App URLs also include `:8443`, such as `https://app.sandbar.localhost:8443`.
-Sandbar uses the selected ports for redirects and fallback listeners without adding listeners on 80/443.
-The static welcome page has no backend and remains after removing the final app.
-Request trust separately with `sandbar trust`, then follow the [macOS browser steps](browser-trust.md#macos-manual-trust-and-removal).
-To remove trust later, keep the selected public root and request `sandbar untrust` explicitly.
+With ports 80/443, open `https://sandbar.localhost` or `https://app.sandbar.localhost`.
+HTTP redirects retain status 308, hostname, path, and query.
+With custom ports 8080/8443, use `http://sandbar.localhost:8080` and `https://sandbar.localhost:8443`.
+Redirects and HTTP/3 advertisement identify the selected HTTPS port. The job claims no other ports.
+The static welcome page needs no backend and remains after removing the final app.
+Service migration preserves the original CA and existing trust. It does not run trust or untrust.
+For a fresh installation, request `sandbar trust` separately, then follow the [macOS browser steps](browser-trust.md#macos-manual-trust-and-removal).
 Stopping or removing the executable does not remove certificates, routes, or trust.
-There is no automatic macOS uninstaller. Review setup backups before restoring owned Caddy changes and preserve unrelated content.
+There is no automatic macOS uninstaller. Preserve unrelated configuration and CA material during manual restoration.
 
-Real service, browser trust, exact-root removal, and new-login checks remain pending until each installation acceptance check runs.
-See the [installation checklist](development.md#macos-installation-acceptance).
+Real service, browser trust, exact-root removal, and new-login checks remain pending until verified separately.
+See the [installation checklist](development.md#macos-installation-acceptance) and [macOS setup recovery](#macos-setup-recovery).
+
+## macOS setup recovery
+
+Ordinary setup rollback removes the new job before restoring the previous configuration and service state.
+Setup reports `~/Library/Application Support/sandbar/state/backups/setup-<id>/backup.json` for manual review.
+Keep that private record, the original Caddy storage, and any reported diagnostics.
+There is no automatic setup resumption or separate setup journal. Route transaction recovery remains separate.
+
+Inspect both possible job owners without changing them:
+
+```sh
+launchctl print "gui/$(id -u)/local.sandbar.caddy"
+launchctl print "gui/$(id -u)/sh.brew.caddy"
+tail -n 100 /opt/homebrew/var/log/caddy.log
+```
+
+An absent job can make `launchctl print` return nonzero. Use the verified log path if your Homebrew prefix differs.
+Compare current files with the backup record before restoring them. Its file entries retain original and published bytes.
+Keep comparison output private because configuration can contain secrets. Preserve external edits made after setup began.
+
+If the replacement job still owns the sockets, unload it before restoring any prior files or restarting Homebrew Caddy:
+
+```sh
+launchctl bootout "gui/$(id -u)/local.sandbar.caddy"
+```
+
+Confirm removal and listener closure. Review the login copy before removing or restoring it from the record.
+Restore the matched Caddyfile, source, generated files, setup record, and job files together, keeping recorded modes and owners.
+A path that did not previously exist needs removal only after checking the record and preserving later edits.
+Do not restore old source alone while a different generated configuration or job remains active.
+Only restore the previous Homebrew registration and running state recorded in the backup after files and sockets are restored.
+For a previously running and registered standard Homebrew job, its supported start command is `brew services start caddy`.
+Do not start both jobs. Do not start a previously stopped service merely to reproduce registration.
+If prior registration and running state differ, follow the reported restoration steps rather than guessing a service command.
+Verify the old routes with the original CA before retrying setup or removing backups.
+Keep existing trust, CA keys, unrelated CAs, and external configuration unchanged.
 
 ## Remove an unused macOS root copy
 
@@ -285,6 +340,10 @@ Setup does not widen permissions on unrelated secrets.
 
 Hostname overlap, wildcard listener conflicts, admin endpoint conflicts, or a conflicting `sandbar` CA block integration.
 Unrelated sites need compatible nonconflicting listeners.
+On macOS, shared loopback HTTP routes retain their handlers through the inherited listener.
+Independent listeners remain unchanged. Explicit compatible protocol restrictions remain effective.
+TLS sites whose automatic redirect listeners conflict with inherited sockets block migration before the old service stops.
+Sandbar reports the conflicting site or listener. It does not globally disable redirects or silently rebind unrelated sites.
 Dynamic imports, unsupported adapters, custom storage, ambiguous syntax, and required custom service environments need manual integration review.
 Sandbar reports the affected inputs rather than rewriting unsupported configurations.
 `--replace-default-site` never authorizes deletion of custom sites.
@@ -348,7 +407,7 @@ Keep backups until route, TLS, browser, service, and boot checks are complete.
 
 ## Setup and migration recovery
 
-The following commands and backup paths apply to Linux setup and migration. macOS setup reports its Application Support backup path.
+The following commands and backup paths apply to Linux. Use [macOS setup recovery](#macos-setup-recovery) for launchd migration.
 
 Ordinary setup errors restore prior file and service state where safe.
 Failed startup or migrated route verification also attempts to restart the identified legacy router.
@@ -427,12 +486,17 @@ scripts/release --version v0.1.0-beta.3-candidate
 cd .sandbox/release/v0.1.0-beta.3-candidate
 ```
 
-On macOS arm64, verify the package with native tools:
+On macOS arm64, verify the package and system-only dynamic linkage with native tools:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
 ./sandbar_v0.1.0-beta.3-candidate_darwin_arm64 --version
+go version -m ./sandbar_v0.1.0-beta.3-candidate_darwin_arm64
+otool -L ./sandbar_v0.1.0-beta.3-candidate_darwin_arm64
 ```
+
+macOS build metadata must show `CGO_ENABLED=1`. Dynamic libraries must come from `/usr/lib` or `/System/Library`.
+The archive retains one Sandbar executable and needs no compiler, Go runtime, Python, or extra helper at runtime.
 
 On Linux amd64, use `sha256sum -c SHA256SUMS` and the `_linux_amd64` executable.
 Run native packaging on the corresponding platform. Do not build or test Linux on the development Mac.

@@ -58,13 +58,13 @@ func TestHelpMatchesNativePlatform(t *testing.T) {
 	}
 	if runtime.GOOS == "darwin" {
 		commands = map[string][]string{
-			"setup":  {"current user's Homebrew Caddy service", "sandbar setup --check --http-port 8080 --https-port 8443", "sandbar setup --http-port 8080 --https-port 8443", "Fresh defaults remain HTTP 80 and HTTPS 443", "Omitted options retain saved ports", "Conflicting explicit settings are rejected", "registers login startup"},
+			"setup":  {"Sandbar's user LaunchAgent", "sandbar setup --check --http-port 80 --https-port 443", "sandbar setup --http-port 80 --https-port 443", "Fresh defaults remain HTTP 80 and HTTPS 443", "Omitted options retain saved ports", "Conflicting explicit settings are rejected", "registers login startup"},
 			"init":   {"Fresh installed defaults are HTTP 80 and HTTPS 443", "Select other ports through macOS setup"},
 			"reload": {"~/Library/Application Support/sandbar/config.json"},
-			"status": {"login startup"},
+			"status": {"login registration", "socket ownership"},
 			"start":  {"on saved ports", "registers login startup", "<Homebrew prefix>/var/log/caddy.log"},
-			"stop":   {"unregisters login startup"},
-			"trust":  {"~/Library/Application Support/sandbar/state/root.crt"},
+			"stop":   {"unregisters login startup", "releases TCP/UDP sockets"},
+			"trust":  {"<verified Caddy storage>/pki/authorities/sandbar/root.crt"},
 		}
 	}
 	for command, want := range commands {

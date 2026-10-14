@@ -30,9 +30,18 @@ if [ "$1" = stop ]; then
     exec "$sandbox_binary" --home "$sandbox_home" stop
 fi
 
+cgo_enabled=0
+if [ "$target_os" = darwin ]; then
+    command -v xcrun >/dev/null 2>&1 || { echo 'macOS source builds require Xcode Command Line Tools. Run xcode-select --install.' >&2; exit 1; }
+    CC=$(xcrun --find clang) && [ -x "$CC" ] || { echo 'macOS source builds require SDK clang. Run xcode-select --install.' >&2; exit 1; }
+    SDKROOT=$(xcrun --sdk macosx --show-sdk-path) && [ -d "$SDKROOT" ] || { echo 'macOS source builds require the macOS SDK. Run xcode-select --install.' >&2; exit 1; }
+    export CC SDKROOT
+    cgo_enabled=1
+fi
+
 cd "$project_dir"
 mkdir -p "$sandbox_home"
-CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -o "$sandbox_binary" .
+CGO_ENABLED="$cgo_enabled" GOOS="$target_os" GOARCH="$target_arch" go build -o "$sandbox_binary" .
 "$sandbox_binary" --home "$sandbox_home" init \
     --http-port 18080 --https-port 18443 dev.sandbar.localhost 18000
 

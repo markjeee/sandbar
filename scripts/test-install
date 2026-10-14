@@ -68,7 +68,13 @@ sed "s/^version='[^']*'/version='$version'/" "$project_dir/install.sh" > "$test_
 cmp "$test_dir/expected-installer" "$test_dir/fixtures/install.sh" || fail 'candidate installer version pin'
 grep 'Unreleased local candidate' "$test_dir/fixtures/RELEASE_NOTES.md" >/dev/null || fail 'candidate notes imply publication'
 go version -m "$test_dir/fixtures/$asset" > "$test_dir/build-info"
-grep 'CGO_ENABLED=0' "$test_dir/build-info" >/dev/null || fail 'candidate build uses CGO'
+if [ "$target_os" = darwin ]; then
+    grep 'CGO_ENABLED=1' "$test_dir/build-info" >/dev/null || fail 'macOS candidate omits cgo activation support'
+    otool -L "$test_dir/fixtures/$asset" > "$test_dir/linkage"
+    awk 'NR > 1 && $1 !~ /^\/usr\/lib\// && $1 !~ /^\/System\/Library\// { exit 1 }' "$test_dir/linkage" || fail 'candidate links a non-system library'
+else
+    grep 'CGO_ENABLED=0' "$test_dir/build-info" >/dev/null || fail 'Linux candidate is not static'
+fi
 grep "GOARCH=$target_arch" "$test_dir/build-info" >/dev/null || fail 'candidate architecture'
 grep "GOOS=$target_os" "$test_dir/build-info" >/dev/null || fail 'candidate operating system'
 
@@ -117,6 +123,27 @@ for installer in "$project_dir/install.sh" "$test_dir/fixtures/install.sh"; do
     FAKE_SYSTEM=Linux FAKE_MACHINE=x86_64 HOME="$test_dir/home" sh "$installer" --help > "$test_dir/output.log"
     grep -F "Default executable: $test_dir/home/.local/bin/sandbar" "$test_dir/output.log" >/dev/null || fail 'Linux default destination'
 done
+
+if [ "$target_os" = darwin ]; then
+    printf '%s\n' 'Testing missing macOS compiler and SDK preserve the installed executable'
+    cat > "$test_dir/tools/xcrun" <<'XCRUN'
+#!/bin/sh
+case "$FAKE_XCRUN_FAILURE:$*" in
+    clang:--find\ clang|sdk:--sdk\ macosx\ --show-sdk-path) exit 1 ;;
+esac
+exec /usr/bin/xcrun "$@"
+XCRUN
+    chmod 755 "$test_dir/tools/xcrun"
+    for prerequisite in clang sdk; do
+        FAKE_XCRUN_FAILURE=$prerequisite
+        export FAKE_XCRUN_FAILURE
+        expect_failure env HOME="$test_dir/home" sh "$project_dir/install.sh" --bin-dir "$test_dir/bin"
+        grep 'Run xcode-select --install' "$test_dir/output.log" >/dev/null || fail 'missing toolchain guidance'
+        assert_preserved
+    done
+    rm "$test_dir/tools/xcrun"
+    unset FAKE_XCRUN_FAILURE
+fi
 
 # A download installation must not use Go, even if it appears in PATH.
 cat > "$test_dir/tools/go" <<'GO'

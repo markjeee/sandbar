@@ -70,6 +70,16 @@ jobs:
           test "$(uname -s)" = Darwin
           test "$(uname -m)" = arm64
           test "$(go env GOOS)/$(go env GOARCH)" = darwin/arm64
+      - name: Check native SDK and install HTTP/3 test client
+        run: |
+          xcrun --find clang
+          xcrun --sdk macosx --show-sdk-path
+          brew install curl
+          echo "$(brew --prefix curl)/bin" >> "$GITHUB_PATH"
+      - name: Assert HTTP/2 and HTTP/3 test support
+        run: |
+          curl --version
+          curl --version | awk '/^Features:/ { for (i = 2; i <= NF; i++) { if ($i == "HTTP2") h2 = 1; if ($i == "HTTP3") h3 = 1 } } END { exit !(h2 && h3) }'
       - name: Install Caddy v2.11.7
         shell: bash
         run: |

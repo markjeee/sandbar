@@ -18,11 +18,34 @@ esac
 # Prevent environment overrides from turning native validation into cross builds.
 export GOOS="$target_os" GOARCH="$target_arch"
 
+cgo_enabled=0
+if [ "$target_os" = darwin ]; then
+    command -v xcrun >/dev/null 2>&1 || { echo 'macOS source builds require Xcode Command Line Tools. Run xcode-select --install.' >&2; exit 1; }
+    CC=$(xcrun --find clang) && [ -x "$CC" ] || { echo 'macOS source builds require SDK clang. Run xcode-select --install.' >&2; exit 1; }
+    SDKROOT=$(xcrun --sdk macosx --show-sdk-path) && [ -d "$SDKROOT" ] || { echo 'macOS source builds require the macOS SDK. Run xcode-select --install.' >&2; exit 1; }
+    export CC SDKROOT
+    cgo_enabled=1
+    export CGO_ENABLED=1
+fi
+
 project_dir=$(CDPATH='' cd -P "$(dirname "$0")/.." && pwd)
 cd "$project_dir"
 check_dir="$project_dir/.sandbox/check"
 tool_dir="$project_dir/.sandbox/tools"
 mkdir -p "$check_dir" "$tool_dir"
+
+if [ "$target_os" = darwin ] && [ "$integration" = 1 ]; then
+    curl_features=$(curl --version) || { echo 'macOS integration requires curl with HTTP/2 and HTTP/3 support.' >&2; exit 1; }
+    printf '%s\n' "$curl_features" | awk '
+        /^Features:/ {
+            for (i = 2; i <= NF; i++) {
+                if ($i == "HTTP2") http2 = 1
+                if ($i == "HTTP3") http3 = 1
+            }
+        }
+        END { exit !(http2 && http3) }
+    ' || { echo 'macOS integration requires curl with HTTP/2 and HTTP/3 support. Install Homebrew curl and prepend its bin directory to PATH.' >&2; exit 1; }
+fi
 
 printf '%s\n' 'Checking formatting and shell syntax'
 unformatted=$(gofmt -l .)
@@ -78,6 +101,6 @@ printf '%s\n' 'Checking reachable Go vulnerabilities'
 "$tool_dir/govulncheck" ./...
 
 printf 'Building the native %s/%s executable\n' "$target_os" "$target_arch"
-CGO_ENABLED=0 go build -trimpath -o "$check_dir/sandbar" .
+CGO_ENABLED="$cgo_enabled" go build -trimpath -o "$check_dir/sandbar" .
 scripts/release --version v0.1.0-beta.3-candidate
 printf 'Checks passed. Coverage: %s/coverage.out\n' "$check_dir"
