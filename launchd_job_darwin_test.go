@@ -273,7 +273,7 @@ func TestLaunchdSetupPublicationRepeatAndRollback(t *testing.T) {
 		return nil
 	}
 	http, https := 8080, 8443
-	options := setupOptions{HTTPPort: &http, HTTPSPort: &https}
+	options := setupOptions{Machine: "fixture", HTTPPort: &http, HTTPSPort: &https}
 	var out, diagnostic bytes.Buffer
 	verify := func(p paths, c config) error {
 		if c.HTTPPort != http || c.HTTPSPort != https {
@@ -282,7 +282,7 @@ func TestLaunchdSetupPublicationRepeatAndRollback(t *testing.T) {
 		_, err := selectedStatusRoots(p.rootCertificate())
 		return err
 	}
-	if err := setupDarwin(p, setupOptions{Check: true, HTTPPort: &http, HTTPSPort: &https}, &out, &diagnostic, verify); err != nil {
+	if err := setupDarwin(p, setupOptions{Machine: "fixture", Check: true, HTTPPort: &http, HTTPSPort: &https}, &out, &diagnostic, verify); err != nil {
 		t.Fatal(err, diagnostic.String())
 	}
 	if _, err := os.Stat(p.state); !os.IsNotExist(err) {
@@ -491,7 +491,7 @@ func TestLaunchdRuntimeTransactionRecovery(t *testing.T) {
 			p, service := launchdSetupFixture(t)
 			var diagnostic bytes.Buffer
 			verify := func(p paths, c config) error { _, err := selectedStatusRoots(p.rootCertificate()); return err }
-			if err := setupDarwin(p, setupOptions{}, io.Discard, &diagnostic, verify); err != nil {
+			if err := setupDarwin(p, setupOptions{Machine: "fixture"}, io.Discard, &diagnostic, verify); err != nil {
 				t.Fatal(err, diagnostic.String())
 			}
 			previousSource := readTestFile(t, p.config)
@@ -648,7 +648,7 @@ func TestLaunchdServiceValidatesConvertedCandidate(t *testing.T) {
 	p, _ := launchdSetupFixture(t)
 	var out, diagnostic bytes.Buffer
 	verify := func(p paths, c config) error { _, err := selectedStatusRoots(p.rootCertificate()); return err }
-	if err := setupDarwin(p, setupOptions{}, io.Discard, &diagnostic, verify); err != nil {
+	if err := setupDarwin(p, setupOptions{Machine: "fixture"}, io.Discard, &diagnostic, verify); err != nil {
 		t.Fatal(err, diagnostic.String())
 	}
 	service := &launchdService{installation: p.installed}

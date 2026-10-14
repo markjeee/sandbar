@@ -42,7 +42,7 @@ func shortHome(t *testing.T) string {
 func initialized(t *testing.T) paths {
 	t.Helper()
 	home := shortHome(t)
-	if code, _, errOut := cli(t, "--home", home, "init", "--http-port", "8080", "--https-port", "8443", "netbox.sandbar.localhost", "8000"); code != 0 {
+	if code, _, errOut := cli(t, "--home", home, "init", "--machine", "fixture", "--http-port", "8080", "--https-port", "8443", "netbox.sandbar.localhost", "8000"); code != 0 {
 		t.Fatal(errOut)
 	}
 	p := testPaths(t, home)

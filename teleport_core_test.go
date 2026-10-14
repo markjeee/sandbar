@@ -78,7 +78,7 @@ func TestTeleportMachineSelection(t *testing.T) {
 		}
 	}
 	for _, test := range []struct{ saved, requested, hostname string }{
-		{"saved", "different", "os"}, {"", "", "invalid_hostname"}, {"", "", ".empty"}, {"", "-invalid", "os"}, {"", "é", "os"},
+		{"saved", "different", "os"}, {"", "", "invalid_hostname"}, {"", "", ".empty"}, {"", "", strings.Repeat("a", 56) + ".example"}, {"", "-invalid", "os"}, {"", "é", "os"},
 	} {
 		if _, err := selectMachine(test.saved, test.requested, test.hostname); err == nil {
 			t.Fatal("accepted", test)

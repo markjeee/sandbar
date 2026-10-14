@@ -96,7 +96,7 @@ func TestReadConfig(t *testing.T) {
 
 func TestInit(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
-	args := []string{"--home", home, "init", "NETBOX.sandbar.localhost", "8000"}
+	args := []string{"--home", home, "init", "--machine", "fixture", "NETBOX.sandbar.localhost", "8000"}
 	if code, out, errOut := cli(t, args...); code != 0 || !strings.Contains(out, filepath.Join(home, "config.json")) {
 		t.Fatalf("%d %s %s", code, out, errOut)
 	}
@@ -156,7 +156,7 @@ func TestInit(t *testing.T) {
 
 func TestInitOverridesAndInvalidArguments(t *testing.T) {
 	home := t.TempDir()
-	if code, _, errOut := cli(t, "--home", home, "init", "--http-port", "8080", "--https-port", "8443", "netbox.sandbar.localhost", "8000"); code != 0 {
+	if code, _, errOut := cli(t, "--home", home, "init", "--machine", "fixture", "--http-port", "8080", "--https-port", "8443", "netbox.sandbar.localhost", "8000"); code != 0 {
 		t.Fatal(errOut)
 	}
 	p := testPaths(t, home)
@@ -168,9 +168,9 @@ func TestInitOverridesAndInvalidArguments(t *testing.T) {
 		t.Fatal(c)
 	}
 	for _, args := range [][]string{
-		{"init", "one"}, {"init", "netbox.sandbar.localhost", "abc"}, {"init", "bad", "8000"},
-		{"init", "--http-port", "8000", "netbox.sandbar.localhost", "8000"},
-		{"init", "netbox.sandbar.localhost", "8000", "--http-port", "8080"},
+		{"init", "--machine", "fixture", "one"}, {"init", "--machine", "fixture", "netbox.sandbar.localhost", "abc"}, {"init", "--machine", "fixture", "bad", "8000"},
+		{"init", "--machine", "fixture", "--http-port", "8000", "netbox.sandbar.localhost", "8000"},
+		{"init", "--machine", "fixture", "netbox.sandbar.localhost", "8000", "--http-port", "8080"},
 		{"start", "extra"}, {"stop", "extra"}, {"unknown"},
 	} {
 		home := filepath.Join(t.TempDir(), "absent")
@@ -193,7 +193,7 @@ func TestPaths(t *testing.T) {
 	envHome := filepath.Join(base, "env")
 	flagHome := filepath.Join(base, "flag")
 	t.Setenv("SANDBAR_HOME", envHome)
-	for _, args := range [][]string{{"init", "netbox.sandbar.localhost", "8000"}, {"--home", flagHome, "init", "netbox.sandbar.localhost", "8000"}} {
+	for _, args := range [][]string{{"init", "--machine", "fixture", "netbox.sandbar.localhost", "8000"}, {"--home", flagHome, "init", "--machine", "fixture", "netbox.sandbar.localhost", "8000"}} {
 		if code, _, errOut := cli(t, args...); code != 0 {
 			t.Fatal(errOut)
 		}
