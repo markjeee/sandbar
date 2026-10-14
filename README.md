@@ -1,47 +1,35 @@
 <!-- Editors: Use plain English. Keep this file within 100 lines. Put users first. Keep progress reports and detailed procedures out. -->
 # Sandbar
 
-Sandbar gives apps on this computer HTTPS names such as `https://app.sandbar.localhost`.
-Add, change, and remove app names while Caddy runs.
-Sandbar exits after each command. The selected Caddy service keeps running.
+Sandbar gives local apps HTTPS names such as `https://app.sandbar.localhost`. Teleport reaches another Sandbar machine's apps through your local Caddy and SSH.
+Add, change, and remove app names while Caddy runs. Sandbar exits after each command. Caddy keeps running.
 
 ## Install
 
-Use Linux amd64 with apt Caddy and systemd, or macOS arm64 with Homebrew Caddy and a Sandbar-managed user LaunchAgent.
-Install [Caddy](https://caddyserver.com/docs/install) v2.11.7 or a later v2 release separately.
-Linux setup also needs Polkit and sudo. Ubuntu 24.04 is the Linux acceptance target.
+Use Linux amd64 with apt Caddy and systemd, or macOS arm64 with Homebrew Caddy and Sandbar's user LaunchAgent. Install [Caddy](https://caddyserver.com/docs/install) v2.11.7 or a later v2 release separately.
+Linux also needs Polkit and sudo. Ubuntu 24.04 is its acceptance target.
 
-Published `v0.1.0-beta.2` supports Linux amd64 only:
-
-```sh
-curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.2/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-For macOS, build the unreleased checkout with Go 1.27.2 or later and Xcode Command Line Tools:
+Teleport requires the unreleased checkout on both machines. Published Linux `v0.1.0-beta.2` does not include Teleport. Build with Go 1.27.2 or later. macOS also needs Xcode Command Line Tools:
 
 ```sh
 sh ./install.sh
 ```
 
-macOS installs a regular executable at `/usr/local/bin/sandbar`. Linux defaults to `~/.local/bin/sandbar`.
-Use `--bin-dir <directory>` to select another destination.
-The installer limits any macOS administrator request to executable publication.
-It does not install Caddy, start services, change trust, or edit shell profiles.
-See [installation and upgrades](docs/install.md) for prerequisites, permissions, and beta.1 migration.
+macOS installs a regular executable at `/usr/local/bin/sandbar`. Linux defaults to `~/.local/bin/sandbar`. Add that directory to `PATH`.
+
+Use `--bin-dir <directory>` for another destination. The installer requests macOS administrator access only for executable publication. It does not install Caddy, start services, change trust, or edit shell profiles.
+See [installation and upgrades](docs/install.md) for release installation, prerequisites, permissions, and beta.1 migration.
 
 ## Set up Caddy
 
-On macOS, preview and apply setup as your normal user:
+On macOS, preview and apply as your normal user:
 
 ```sh
 sandbar setup --check --http-port 80 --https-port 443
 sandbar setup --http-port 80 --https-port 443
 ```
 
-Setup transfers a verified Homebrew user job to Sandbar. Homebrew still supplies the Caddy package.
-Launchd opens loopback TCP/UDP sockets. Caddy runs as your user. Omitted port options retain saved ports.
-
+Setup transfers a verified Homebrew user job to Sandbar. Homebrew supplies Caddy, which runs as your user. Launchd opens loopback TCP/UDP sockets. HTTP/1.1, HTTP/2, and HTTP/3 use the selected HTTPS port. Omitted port options retain saved ports.
 On Linux, use an administrator once:
 
 ```sh
@@ -49,50 +37,64 @@ sudo "$HOME/.local/bin/sandbar" setup --check --user "$USER"
 sudo "$HOME/.local/bin/sandbar" setup --user "$USER" --replace-default-site
 ```
 
-`--replace-default-site` backs up and replaces only Caddy's recognized stock welcome site. Custom sites remain protected.
-Linux setup grants access to **all Caddy routes and files Caddy can read**. Review [access and removal](docs/install.md#access-and-removal).
+`--replace-default-site` backs up and replaces only Caddy's recognized stock welcome site. Custom sites remain protected. Linux grants access to **all Caddy routes and files Caddy can read**. Review [access and removal](docs/install.md#access-and-removal).
 **After Linux setup, log out and back in. A new terminal pane does not refresh group membership.**
-macOS setup starts the user service and registers login startup. It does not provide service before login.
 
-For a new CA, request trust as your normal user. Migration keeps existing trust. Check `https://sandbar.localhost`:
+macOS starts the user service and registers login startup. It does not provide service before login. Setup saves a stable name from the lowercase first OS hostname label. `--machine <name>` overrides the initial name.
+Saved identity survives OS renames. For a new CA, request trust as your normal user:
 
 ```sh
 sandbar trust
 ```
 
-Command success does not prove browser trust. See the [browser guide](docs/browser-trust.md).
+Migration keeps existing trust. Open `https://sandbar.localhost`. Command success does not prove browser trust. See the [browser guide](docs/browser-trust.md).
 
 ## Add an app
 
-Run your app on `127.0.0.1:8000`, then give it a name:
+Run your app on `127.0.0.1:8000`, then use `sandbar add app.sandbar.localhost 8000` and `sandbar status`.
+Open `https://app.sandbar.localhost`. HTTP redirects to HTTPS. Backends must use other ports. Custom macOS ports remain supported.
 
-```sh
-sandbar add app.sandbar.localhost 8000
-sandbar status
-```
+Machine `work` also serves `https://app.sandbar-work.localhost` directly, without SSH or a redirect to the canonical name. Nested names work too. Aliases change with canonical routes. Changes apply without restarting Caddy.
+When Caddy is stopped, route changes are saved for its next start.
 
-Open `https://app.sandbar.localhost`. These examples select ports 80/443. Backends must use other ports.
-Custom macOS ports remain supported. HTTP redirects to the selected HTTPS port.
-Changes apply without restarting Caddy. When stopped, they are saved for its next start.
+Apps must accept their machine URLs. Review allowed hosts, CSRF, redirects, cookies, and login settings. Sandbar does not rewrite app URLs.
 
 | Command | Result |
 | --- | --- |
 | `sandbar add --replace app.sandbar.localhost 8001` | Change an app's address. |
-| `sandbar ls` | List app names and addresses. |
-| `sandbar rm app.sandbar.localhost` | Remove an app name. |
+| `sandbar ls` / `sandbar rm app.sandbar.localhost` | List apps / remove a name. |
 | `sandbar reload` | Check and apply manual app-list edits. |
-| `sandbar start` | Start Caddy. On macOS, register login startup. |
-| `sandbar stop` | Stop every Caddy route. On macOS, unregister login startup. |
-| `sandbar untrust` | Request removal of Sandbar's certificate trust. |
+| `sandbar start` / `sandbar stop` | Start Caddy / stop every Caddy route. |
+| `sandbar untrust` | Request certificate trust removal. |
 | `sandbar <command> --help` | Show options and examples. |
 
-Linux stop keeps boot startup enabled. macOS start registers login startup again after stop.
-See the [user reference](docs/reference.md) for paths, logs, status, and recovery.
+Linux stop keeps boot startup enabled. macOS stop unregisters login startup. Start registers it again. See the [user reference](docs/reference.md) for paths, logs, status, and recovery.
+
+## Teleport to another machine
+
+Prepare remote Caddy and `app.sandbar.localhost` first. Both peers need the current checkout and completed setup.
+This example assumes direct SSH alias `work`, remote machine name `work`, and HTTPS 443 on both machines. Use your existing SSH agent with keys loaded. Sandbar keeps dedicated SSH files under its configuration directory and does not manage keys or forward the agent.
+On the connecting machine, run `sandbar teleport register work`.
+
+Registration saves the destination, then calls connect. Open `https://app.sandbar-work.localhost` in the connecting machine's browser.
+If SSH cannot find Sandbar, add `--remote-bin <absolute-path>` before `work`. See [Teleport](docs/teleport.md) for options and app settings.
+
+| Command | Result |
+| --- | --- |
+| `sandbar teleport register work` | Save the destination, then connect. |
+| `sandbar teleport connect work` | Connect or reuse its connection. |
+| `sandbar teleport disconnect work` | Close the connection and keep registration. |
+| `sandbar teleport ls` | List registered destinations and observed SSH state. |
+| `sandbar teleport rm work` | Disconnect and remove the destination and its proxy trust. |
+| `sandbar teleport info --json` | Show this machine's public peer metadata. |
+
+A failed connect retains registration. Reconnect explicitly. Boot, login, and Caddy startup never connect automatically.
+
+Browsers use the local Sandbar CA. The remote CA verifies only that destination's proxy transport. Registration does not import browser trust. An unavailable registered connection returns ordinary HTTP 502. Unknown destinations follow normal Caddy TLS and unmatched-host behavior.
 
 ## Build and contribute
 
 See the [development guide](docs/development.md) for native builds, the isolated `.sandbox` router, and checks.
-Automated macOS checks use temporary state. Real service, Chrome trust, trust removal, and new-login checks need separate installation acceptance.
-Choose your tools and submit changes through a [pull request](https://github.com/markjeee/sandbar/pulls).
-Include relevant tests and run the checks in the development guide.
+Automated checks use temporary state. Installed service, Chrome trust, trust removal, and new-login checks need separate acceptance.
+Submit a [pull request](https://github.com/markjeee/sandbar/pulls) with relevant tests and development check results.
 Sandbar uses the [MIT license](LICENSE).
