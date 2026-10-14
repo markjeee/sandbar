@@ -80,7 +80,7 @@ func saveTransaction(p paths, tx transaction) error {
 		defer os.RemoveAll(staging)
 		dir = staging
 		if p.installed != nil {
-			if err := os.Chmod(dir, 0770|os.ModeSetgid); err != nil {
+			if err := os.Chmod(dir, installedDirectoryMode); err != nil {
 				return err
 			}
 		}
@@ -366,7 +366,7 @@ func prepareTransaction(p paths, tx *transaction) error {
 	if err != nil {
 		return err
 	}
-	tx.CandidateMetadata = &fileMetadata{Mode: 0660, UID: os.Getuid(), GID: p.installed.GroupID}
+	tx.CandidateMetadata = &fileMetadata{Mode: installedFileMode, UID: os.Getuid(), GID: p.installed.GroupID}
 	return nil
 }
 func restoreTransactionFile(p paths, tx transaction, path string, data []byte, candidate bool) error {

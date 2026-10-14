@@ -1,13 +1,15 @@
-# Browser trust on Ubuntu
+# Browser trust on Linux and macOS
 
-Browser acceptance targets Ubuntu 24.04 and Google Chrome installed from its native Debian package.
+Browser acceptance targets native Google Chrome on Ubuntu 24.04 and macOS arm64.
 Use a local HTTP backend and one configured `<name>.sandbar.localhost` route.
 NetBox is an optional application example. Sandbar needs no NetBox-specific settings or code.
-Firefox, Java, macOS, and other browser package formats are outside this acceptance target.
+Firefox, Java, and other browser package formats are outside this acceptance target.
+macOS support is available from the unreleased checkout. Published beta.2 is Linux-only.
+Real macOS service, browser trust, trust removal, and login acceptance remain pending until separately checked.
 
 ## Start and request trust
 
-Complete [service setup](install.md#connect-the-standard-caddy-service) with beta.2 or later first.
+Complete [Linux service setup](install.md#connect-the-standard-caddy-service) or [macOS setup](install.md#connect-homebrew-caddy-on-macos) first.
 For an existing beta.1 router, follow the [migration guide](install.md#upgrade-from-the-private-router).
 Run the backend on `127.0.0.1:8000`, then add its app name:
 
@@ -17,10 +19,12 @@ sandbar trust
 ```
 
 Use the same `--home <directory>` or `SANDBAR_HOME` for every command when selecting another Sandbar home.
-The HTTP URL redirects to `https://app.sandbar.localhost`.
+Linux defaults redirect to `https://app.sandbar.localhost`.
+With macOS setup selecting 8080/8443, `http://app.sandbar.localhost:8080` redirects to `https://app.sandbar.localhost:8443`.
 The backend must be running before browser verification.
 
-Installed `trust` uses CA ID `sandbar` at `unix//var/lib/sandbar/admin/admin.sock`.
+Installed `trust` uses CA ID `sandbar` at the selected service's private admin socket.
+On Linux that endpoint is `unix//var/lib/sandbar/admin/admin.sock`. macOS uses its Application Support state.
 Development `trust` uses CA ID `local` at the selected home's private socket.
 The selected Caddy router must be running. Sandbar does not start it or try another endpoint.
 Installation, setup, migration, initialization, route changes, start, and stop do not change trust stores.
@@ -40,7 +44,12 @@ Keep private CA keys private. Import only the public `root.crt`.
 ## Identify the exact root
 
 `start`, `trust`, and `untrust` identify the public root certificate path.
-Installed public root: `/var/lib/sandbar/root.crt`.
+Installed Linux public root: `/var/lib/sandbar/root.crt`.
+Installed macOS public root: `<verified Caddy storage>/pki/authorities/sandbar/root.crt`.
+A typical arm64 Homebrew path is `/opt/homebrew/var/lib/caddy/pki/authorities/sandbar/root.crt`. Use Sandbar's printed path.
+macOS reads this original directly and does not create a copy or symlink in Sandbar state.
+After installing the updated CLI, follow [manual duplicate cleanup](install.md#remove-an-unused-macos-root-copy) for an earlier state copy.
+Deleting a verified duplicate does not change trust. Keep any differing old certificate for deliberate trust removal.
 With `--home <directory>`, it is `<directory>/state/caddy/pki/authorities/local/root.crt`.
 The old beta defaults were `$XDG_STATE_HOME/sandbar/caddy/pki/authorities/local/root.crt`, or `~/.local/state/sandbar/caddy/pki/authorities/local/root.crt`.
 Migration preserves that root's bytes and signing material under the installed `sandbar` authority.
@@ -58,13 +67,13 @@ Compare the SHA-256 fingerprint with the certificate shown in Chrome before impo
 Roots from different Sandbar homes can share the same display name. The name alone does not identify the certificate.
 Retain the public root and its fingerprint until all trust removal is complete.
 
-## Verify Chrome and import manually if needed
+## Verify Chrome and import manually on Linux
 
 Open `http://app.sandbar.localhost` in Chrome on the same machine as Sandbar.
 Confirm the HTTPS URL, expected backend content, and absence of certificate warnings.
 Successful Caddy delegation does not prove Chrome trust or mean that every optional store changed.
 
-If Chrome reports `NET::ERR_CERT_AUTHORITY_INVALID`, open `chrome://settings/certificates`.
+If Chrome on Linux reports `NET::ERR_CERT_AUTHORITY_INVALID`, open `chrome://certificate-manager` (Chrome 134 or later).
 Use its certificate manager and the local or custom authority certificate controls.
 Import the selected public `root.crt` as an authority trusted to identify websites.
 Compare its SHA-256 fingerprint with the local file. Labels vary between Chrome versions.
@@ -76,6 +85,72 @@ Current Chromium uses `~/.local/share/pki/nssdb`, but retains `~/.pki/nssdb` whe
 A separate browser profile alone does not isolate this database.
 The [isolated browser proof](browser-proof.md) uses a separate process home and explicit temporary NSS database.
 See [Chromium's Linux certificate guide](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/cert_management.md) for certificate utility commands.
+
+## macOS manual trust and removal
+
+Chrome reads explicit local trust from the default and System keychains.
+SSL trust can be set in Keychain Access. See [Chromium's platform trust rules](https://chromium.googlesource.com/chromium/src/+/main/net/data/ssl/chrome_root_store/faq.md#how-does-the-chrome-certificate-verifier-integrate-with-platform-trust-stores-for-local-trust-decisions).
+A separate Chrome profile does not isolate these keychains.
+Ordinary tests never run the commands in this section.
+Use manual steps only as a deliberate trust operation for the exact public root identified above.
+
+After `sandbar trust`, check the route in a fresh Chrome process.
+If Chrome still rejects the CA, open Keychain Access through Spotlight.
+Choose the login keychain and import the selected public `root.crt`, then open that certificate.
+Compare its SHA-256 fingerprint with `openssl x509` before changing trust.
+Expand Trust and set Secure Sockets Layer (SSL) to Always Trust. Save and authenticate if macOS requests it.
+Do not import a private key or change another certificate with the same display name.
+See Apple's [certificate import](https://support.apple.com/guide/keychain-access/add-certificates-to-a-keychain-kyca2431/mac) and [trust settings](https://support.apple.com/guide/keychain-access/change-the-trust-settings-of-a-certificate-kyca11871/mac) guides.
+
+The equivalent current-user command is available through macOS `security`:
+
+```sh
+security add-trusted-cert -r trustRoot -p ssl -k "$HOME/Library/Keychains/login.keychain-db" "$root_cert"
+```
+
+Run it as your normal user, with `root_cert` set to the exact printed public root path.
+This changes user trust. It is not part of automated validation.
+Record the keychain and trust domain you changed.
+Caddy can also use the administrator trust domain. Do not infer which stores changed from command success alone.
+
+When exact-root removal is separately requested, run `sandbar untrust` first.
+Remove any manual user-domain trust for that same certificate with:
+
+```sh
+security remove-trusted-cert "$root_cert"
+```
+
+Only if you recorded trust in the administrator domain, remove that exact root's administrator trust with:
+
+```sh
+sudo security remove-trusted-cert -d "$root_cert"
+```
+
+These commands remove trust settings and can leave the certificate entry present.
+Use Keychain Access to inspect the recorded keychain and compare the SHA-256 fingerprint before deleting any remaining manual import.
+Preserve other roots, including those with the same display name.
+Remove any separately imported authority in Chrome's certificate manager too, checking the fingerprint first.
+Keep Caddy and the backend running, then verify certificate rejection in a fresh Chrome process.
+Do not remove the installed CA automatically after a successful browser check.
+
+## macOS browser acceptance
+
+Run this checklist after requested macOS setup with `--http-port 8080 --https-port 8443` and explicit trust setup.
+Quit Chrome fully and confirm its process exits before each trust transition. A new window or profile is insufficient.
+Record Chrome and macOS versions, the root fingerprint, and each result as pending or verified.
+
+1. Run a generic backend and configure `app.sandbar.localhost` and `api.app.sandbar.localhost` to its port.
+2. Open `http://app.sandbar.localhost:8080/check.html?phase=trusted` with normal hostname resolution.
+3. Confirm HTTP 308 followed by verified HTTPS at `https://app.sandbar.localhost:8443/check.html?phase=trusted`, the expected backend content, and unchanged path and query.
+4. Repeat for `http://api.app.sandbar.localhost:8080/check.html?phase=trusted`. Confirm the nested name resolves and verifies.
+5. Open `https://sandbar.localhost:8443` and confirm the built-in welcome page remains available.
+6. Only after a separate removal request, remove the exact root and any recorded manual imports, then repeat with a fresh Chrome process.
+7. Confirm certificate rejection while the backend and Caddy remain reachable. A connection failure does not prove removal.
+
+Do not use DNS overrides, hosts-file changes, proxy changes, warning exceptions, or certificate-error bypasses for browser acceptance.
+Caddy command delegation, direct-root curl probes, and setup fixtures are separate evidence. They do not prove browser trust.
+Unperformed service, browser, removal, and new-login checks stay pending without blocking development readiness.
+The [installation checklist](development.md#macos-installation-acceptance) records service and login checks separately.
 
 ## Remove trust
 
@@ -90,11 +165,13 @@ sandbar untrust
 `untrust` delegates `caddy untrust --cert <selected-root.crt>`.
 It works after Caddy stops and does not need valid route configuration.
 The stored public root must remain readable. Sandbar does not search other homes or regenerate a missing root.
+On macOS, this is Caddy's original file. Sandbar does not fall back to an old copy in its state directory.
 Configuration, logs, the public certificate, and private CA keys remain intact.
 Caddy can remove trust without deleting a certificate entry completely.
 Repeated commands retain Caddy's result. They do not replace the CA or promise atomic changes across stores.
 
-Remove any separately imported Chrome authority through the same certificate manager used for import.
+On Linux, remove any separately imported Chrome authority through the same certificate manager used for import.
+On macOS, follow the exact-root keychain steps above and review any separate Chrome imports.
 Compare the SHA-256 fingerprint before removing it. Preserve other roots with the same display name.
 Review any Firefox or Java stores used during setup, even though their browser or application acceptance is outside the current native acceptance target.
 After removal, start the selected router and backend again, then use a fresh Chrome process to verify certificate rejection.

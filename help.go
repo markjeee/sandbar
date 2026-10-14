@@ -1,6 +1,6 @@
-//go:build linux
-
 package main
+
+import "runtime"
 
 // Agents: Keep CLI help brief, concise, user friendly, and in simple plain English.
 // Put technical details in command help or the user guides.
@@ -31,6 +31,13 @@ See the README and docs for setup, development ports, recovery, and browser trus
 
 func topLevelHelp() string { return mainHelp }
 
+func platformHelp(linux, darwin string) string {
+	if runtime.GOOS == "darwin" {
+		return darwin
+	}
+	return linux
+}
+
 func commandHelpRequested(args []string) bool {
 	for _, arg := range args {
 		if arg == "--" {
@@ -49,7 +56,7 @@ func helpText(command string) (string, bool) {
 }
 
 var commandHelp = map[string]string{
-	"setup": `Connect Sandbar to apt-packaged Caddy and systemd on Linux amd64.
+	"setup": platformHelp(`Connect Sandbar to apt-packaged Caddy and systemd on Linux amd64.
 
 Usage: sandbar setup --user <name> [options]
 
@@ -70,7 +77,31 @@ Migration needs both paths and keeps the existing root certificate.
 Installed use requires ports 80 and 443. Legacy routers with other ports cannot migrate.
 Custom sites remain protected. Review conflicts before changing them.
 Do not use --home or SANDBAR_HOME with setup. See docs/install.md for details.
-`,
+`, `Connect Sandbar to the current user's Homebrew Caddy service on macOS arm64.
+
+Usage: sandbar setup [options]
+
+Options:
+  --check                  Preview changes without applying them
+  --http-port <port>       Installed HTTP redirect port
+  --https-port <port>      Installed HTTPS port
+  --replace-default-site   Back up and replace Caddy's recognized stock welcome site
+
+Example:
+  sandbar setup --check --http-port 8080 --https-port 8443
+  sandbar setup --http-port 8080 --https-port 8443
+
+Run as your normal user. Install Homebrew Caddy separately before setup.
+Setup preserves supported unrelated sites and creates a missing Homebrew Caddyfile.
+Setup starts Caddy and registers login startup. It does not install certificate trust.
+Fresh defaults remain HTTP 80 and HTTPS 443. Omitted options retain saved ports.
+Use high ports when the user service cannot bind privileged ports.
+Setup saves selected ports for later start, reload, and repeated setup.
+Port settings affect shared Caddy settings. Conflicting explicit settings are rejected.
+Run sandbar trust explicitly afterward.
+Custom sites remain protected. Review conflicts before changing them.
+Do not use --home or SANDBAR_HOME with setup. See docs/install.md for details.
+`),
 	"init": `Create an empty app list, or add the first app.
 
 Usage: sandbar init [--http-port <port>] [--https-port <port>] [<hostname> <app-address>]
@@ -84,7 +115,8 @@ First development app: sandbar --home /tmp/sandbar-demo init app.sandbar.localho
 Development: sandbar --home /tmp/sandbar-demo init --http-port 8080 --https-port 8443
 
 Options must come before the hostname. Existing settings are kept.
-Run setup first for installed use. Installed Caddy always uses ports 80 and 443.
+Run setup first for installed use.
+` + platformHelp("Installed Caddy always uses ports 80 and 443.", "Fresh installed defaults are HTTP 80 and HTTPS 443. Select other ports through macOS setup.") + `
 Use --home for a separate development router with other ports.
 `,
 	"add": `Give an app on this computer an HTTPS name.
@@ -124,8 +156,7 @@ The built-in installed welcome page is separate from this app list.
 Usage: sandbar reload
 Example: sandbar reload
 
-Installed app list: /etc/sandbar/config.json
-A rejected change keeps your edits for correction and leaves active routes working.
+` + platformHelp("Installed app list: /etc/sandbar/config.json\n", "Installed app list: ~/Library/Application Support/sandbar/config.json\n") + `A rejected change keeps your edits for correction and leaves active routes working.
 Do not edit generated files. See the README for recovery and custom Caddy changes.
 `,
 	"status": `Check Caddy and each configured HTTPS app address.
@@ -133,7 +164,7 @@ Do not edit generated files. See the README for recovery and custom Caddy change
 Usage: sandbar status
 Example: sandbar status
 
-Reports service state, boot startup, access, pending changes, and saved recovery state.
+` + platformHelp("Reports service state, boot startup, access, pending changes, and saved recovery state.", "Reports service state, login startup, access, pending changes, and saved recovery state.") + `
 App checks verify certificates and show HTTP codes or connection errors.
 HTTP 5xx is a failure. Other HTTP codes show reachability, not app health.
 This does not prove browser trust or name resolution. See docs/browser-trust.md.
@@ -143,10 +174,10 @@ This does not prove browser trust or name resolution. See docs/browser-trust.md.
 Usage: sandbar start
 Example: sandbar start
 
-Installed use starts caddy.service. Setup enables it at boot.
+` + platformHelp("Installed use starts caddy.service. Setup enables it at boot.", "Installed use starts Homebrew Caddy on saved ports and registers login startup.") + `
 Use --home or SANDBAR_HOME to select a separate development router.
 This command does not add certificate trust.
-Installed logs: journalctl -u caddy.service
+` + platformHelp("Installed logs: journalctl -u caddy.service", "Installed logs: <Homebrew prefix>/var/log/caddy.log (the command reports the path)") + `
 `,
 	"stop": `Stop Caddy. Installed use stops every route Caddy serves.
 
@@ -157,7 +188,7 @@ Development: sandbar --home /tmp/sandbar-demo stop
 An explicit development home stops only that development router.
 Configuration, certificates, and certificate trust remain in place.
 Stop remains available when the app list or recovery state is invalid.
-This command does not disable Caddy's boot startup.
+` + platformHelp("This command does not disable Caddy's boot startup.", "Installed stop unregisters login startup. A later start registers it again.") + `
 `,
 	"trust": `Ask Caddy to add Sandbar's root certificate to trust stores.
 
@@ -167,7 +198,7 @@ Example: sandbar trust
 Run as your normal user while the selected Caddy router runs.
 Caddy may request administrator access. Check the route in your browser afterward.
 Command success does not prove browser trust. See docs/browser-trust.md.
-Installed public root: /var/lib/sandbar/root.crt
+` + platformHelp("Installed public root: /var/lib/sandbar/root.crt", "Installed public root: ~/Library/Application Support/sandbar/state/root.crt") + `
 --home selects a development certificate. It does not isolate trust stores.
 `,
 	"untrust": `Ask Caddy to remove trust for the selected Sandbar root certificate.

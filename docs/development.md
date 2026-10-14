@@ -6,8 +6,18 @@ Describe what changed and how you checked it.
 Sandbar uses Go's standard library and keeps implementation in this repository.
 Use Go 1.27.2 or later. Read the affected code and tests before changing behavior.
 Include relevant tests and run the shared checks below before submitting a change.
-Keep default automated tests away from real trust stores, privileged ports, and personal Sandbar homes. Use guarded disposable fixtures for service acceptance.
+Keep automated tests away from real trust stores, privileged ports, and installed Sandbar state.
+Linux service acceptance uses guarded disposable fixtures. macOS installation acceptance runs later, when requested.
 Sandbar is distributed under the [MIT license](../LICENSE).
+
+## Native prerequisites
+
+Use Linux amd64 or macOS arm64 with Go 1.27.2 or later and a native C compiler for race checks.
+Install Caddy v2.11.7 or a later v2 release separately.
+Linux integration needs `ss` from `iproute2`. macOS integration needs `lsof` and native process inspection tools.
+macOS installed use needs Homebrew's standard current-user Caddy service. Private development does not register that service.
+The curl proof also needs Python 3 and curl.
+Run Mac builds and tests natively. Keep Linux builds and tests on Linux CI or another Linux machine.
 
 ## Platform integration
 
@@ -32,7 +42,7 @@ sandbar --home /tmp/sandbar-demo start
 sandbar --home /tmp/sandbar-demo stop
 ```
 
-Explicit homes can use relative paths. Keep paths short enough for a Linux Unix socket.
+Explicit homes can use relative paths. Keep paths short enough for the platform Unix socket limit. Darwin has a smaller limit than Linux.
 Paths cannot contain control characters, braces, or vertical bars because Caddy treats these as syntax.
 Directories have mode `0700`. Private regular files have mode `0600`.
 Development routers do not serve the installed welcome page.
@@ -73,7 +83,24 @@ The launcher always passes `--home`, so `SANDBAR_HOME` cannot select your normal
 `stop` uses the existing executable, so build errors do not prevent shutdown.
 The launcher accepts only these three commands.
 
-Configuration, logs, sockets, and CA material remain in ignored `.sandbox/`.
+Both platforms use the same ignored layout:
+
+```text
+sandbar/
+├── scripts/                 # Shared development, checks, and packaging
+└── .sandbox/
+    ├── sandbar              # Native development executable
+    ├── config.json          # Persistent manual development routes
+    ├── state/               # Development Caddyfile, socket, logs, and CA
+    ├── check/               # Validation executable, coverage, reports
+    ├── tools/               # Pinned analysis tools
+    └── release/<version>/   # Local candidate packages
+```
+
+The manual development sandbox persists between runs.
+Individual automated tests use fresh OS temporary directories, using existing helpers and short paths when sockets require them.
+Their cleanup stops only test-owned processes and removes only test-owned temporary files.
+Tests leave persistent `.sandbox` routes and state, installed configuration, service registration, and trust stores intact.
 Stop the sandbox before moving the checkout or editing its source configuration.
 This isolates state and ports. Other apps can still occupy the selected ports.
 
@@ -109,7 +136,7 @@ The disposable home remains available for inspection after the proof.
 
 ## Checks
 
-Run on Linux with Go 1.27.2 or later and a C compiler:
+Run natively on Linux amd64 or macOS arm64 with the prerequisites above:
 
 ```sh
 scripts/check
@@ -117,8 +144,11 @@ scripts/check --integration
 ```
 
 Both commands check formatting, shell syntax, installers, module consistency, vet, Staticcheck, shuffled race tests, fuzzing, known vulnerabilities, and static builds.
-The second also runs real Caddy acceptance. It requires installed Caddy and `ss` from `iproute2`.
-CI uses the same command with `--integration`.
+The second also runs real Caddy routing and setup configuration acceptance.
+It uses `ss` on Linux or machine-readable `lsof` output on macOS for independent listener evidence.
+CI uses the same command with `--integration`, with a native architecture assertion for each platform.
+Record local macOS, macOS CI, and Linux CI results separately against the same revision.
+A configured CI job is not evidence that the remote checks passed.
 
 Pinned tools build into `.sandbox/tools`. Initial setup and vulnerability scanning need network access.
 Staticcheck v0.8.1 uses x/tools v0.50.0 for Go 1.27.2 export data. Govulncheck uses v1.8.0.
@@ -135,8 +165,45 @@ Keep failing fuzz inputs under `testdata/fuzz/FuzzConfig` when fixing discovered
 Tests that change process environment or exercise the router lock stay sequential.
 Pure tests can run in parallel when their state is independent.
 Native tests use temporary homes and high ports, then stop only the Caddy instances they create.
-Trust-command tests use fake Caddy. Browser acceptance uses the separate [isolated browser proof](browser-proof.md).
+Trust-command tests use fake Caddy and preserve personal trust stores.
+Linux browser acceptance uses the separate [isolated browser proof](browser-proof.md).
+macOS browser acceptance follows explicit installation and trust requests below.
 See [release preparation](install.md#release-preparation) for packaging and installer checks.
+
+## Test layers
+
+Use these three layers alongside the persistent manual development sandbox:
+
+| Layer | Runs | State and effects |
+| --- | --- | --- |
+| Automated integration | Native Sandbar, real Caddy and backends, verified TLS | Fresh temporary homes, high ports, test-owned cleanup |
+| Automated setup | Actual setup logic, real `caddy adapt` and `caddy validate`, simulated service operations | Temporary installation paths and isolated Caddy storage |
+| Installation acceptance | Installed Sandbar and the actual Homebrew user service | Normal installed paths, when the Developer requests installation |
+
+Setup fixtures cover preview, fresh and repeated setup, conflicts, backups, ordinary rollback, and preserved unrelated configuration.
+They validate default and explicitly selected installed ports without binding privileged ports or registering the real service.
+TLS clients use the selected temporary CA directly. They never disable certificate verification or import it into personal stores.
+Passing required native checks establishes readiness for installation. It does not prove installed service operation or browser trust.
+No disposable macOS VM or spare Mac is required for development completion.
+
+## macOS installation acceptance
+
+Run this checklist only when installation and its service changes are requested.
+Record each result separately as pending or verified. Do not infer it from mocks or private-router tests.
+
+1. Preview `sandbar setup --check --http-port 8080 --https-port 8443` and review paths and conflicts.
+2. Apply `sandbar setup --http-port 8080 --https-port 8443` as the normal user. Verify the Homebrew service and loopback listeners on 8080/8443.
+3. Check `http://sandbar.localhost:8080` redirects to `https://sandbar.localhost:8443`. Confirm Sandbar has no listeners on 80/443.
+4. Start a generic backend and verify a configured app route with the selected root and normal TLS verification.
+5. Change and remove routes while Caddy runs. Confirm its PID stays unchanged and unrelated sites keep working.
+6. Stop and start through Sandbar. Confirm listener closure, restored routes and ports, unchanged root fingerprint, and renewed login registration. Repeat setup without port options and verify retained ports.
+7. After explicit `sandbar trust`, follow the [macOS Chrome checklist](browser-trust.md#macos-browser-acceptance) in a fresh browser process.
+8. Verify startup after an actual later login. Registration alone is insufficient. Do not force logout during development.
+9. Run exact-root trust removal only when separately requested, then verify certificate rejection in a fresh Chrome process with Caddy running.
+
+Keep real service, browser trust, trust removal, and actual new-login acceptance pending until checked.
+Do not remove the installed CA as automatic test cleanup.
+Use ordinary setup backups and reported diagnostics for recovery. Preserve unrelated Caddy configuration and CA material.
 
 ## Disposable service acceptance
 

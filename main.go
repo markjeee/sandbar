@@ -1,5 +1,3 @@
-//go:build linux
-
 package main
 
 import (
@@ -127,10 +125,12 @@ func initialize(paths paths, args []string, out, errOut io.Writer) error {
 	if flags.NArg() == 2 {
 		cfg.Routes = append(cfg.Routes, route{flags.Arg(0), flags.Arg(1)})
 	}
-	if err := cfg.validate(); err != nil {
-		return err
+	if paths.installed == nil || !customInstalledPorts {
+		if err := cfg.validate(); err != nil {
+			return err
+		}
 	}
-	if paths.installed != nil && (cfg.HTTPPort != 80 || cfg.HTTPSPort != 443) {
+	if paths.installed != nil && !customInstalledPorts && (cfg.HTTPPort != 80 || cfg.HTTPSPort != 443) {
 		return errors.New("installed Sandbar uses ports 80 and 443; use --home for development ports")
 	}
 	return withLock(paths, func() error {
@@ -139,6 +139,24 @@ func initialize(paths paths, args []string, out, errOut io.Writer) error {
 		}
 		existing, err := readConfig(paths.config)
 		if err == nil {
+			if paths.installed != nil && customInstalledPorts {
+				conflict := false
+				flags.Visit(func(f *flag.Flag) {
+					switch f.Name {
+					case "http-port":
+						conflict = conflict || cfg.HTTPPort != existing.HTTPPort
+					case "https-port":
+						conflict = conflict || cfg.HTTPSPort != existing.HTTPSPort
+					}
+				})
+				if conflict {
+					return errors.New("change installed macOS ports with sandbar setup --http-port <port> --https-port <port>")
+				}
+				cfg.HTTPPort, cfg.HTTPSPort = existing.HTTPPort, existing.HTTPSPort
+				if err := cfg.validate(); err != nil {
+					return err
+				}
+			}
 			if existing.HTTPPort != cfg.HTTPPort || existing.HTTPSPort != cfg.HTTPSPort || !reflect.DeepEqual(existing.Routes, cfg.Routes) {
 				return fmt.Errorf("configuration already exists with different settings: %s", paths.config)
 			}
@@ -147,6 +165,14 @@ func initialize(paths paths, args []string, out, errOut io.Writer) error {
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
+		}
+		if paths.installed != nil && customInstalledPorts {
+			if cfg.HTTPPort != 80 || cfg.HTTPSPort != 443 {
+				return errors.New("select installed macOS ports with sandbar setup --http-port <port> --https-port <port>")
+			}
+			if err := cfg.validate(); err != nil {
+				return err
+			}
 		}
 		if err := createSelectedConfig(paths, cfg); err != nil {
 			return err

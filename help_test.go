@@ -1,10 +1,9 @@
-//go:build linux
-
 package main
 
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -44,5 +43,46 @@ func TestHelpRequestStopsAtArgumentSeparator(t *testing.T) {
 	}
 	if !commandHelpRequested([]string{"--replace", "--help"}) {
 		t.Fatal("help option not found")
+	}
+}
+
+func TestHelpMatchesNativePlatform(t *testing.T) {
+	commands := map[string][]string{
+		"setup":  {"--user", "--migrate-config", "systemd"},
+		"init":   {"Installed Caddy always uses ports 80 and 443."},
+		"reload": {"/etc/sandbar/config.json"},
+		"status": {"boot startup"},
+		"start":  {"caddy.service", "journalctl"},
+		"stop":   {"does not disable Caddy's boot startup"},
+		"trust":  {"/var/lib/sandbar/root.crt"},
+	}
+	if runtime.GOOS == "darwin" {
+		commands = map[string][]string{
+			"setup":  {"current user's Homebrew Caddy service", "sandbar setup --check --http-port 8080 --https-port 8443", "sandbar setup --http-port 8080 --https-port 8443", "Fresh defaults remain HTTP 80 and HTTPS 443", "Omitted options retain saved ports", "Conflicting explicit settings are rejected", "registers login startup"},
+			"init":   {"Fresh installed defaults are HTTP 80 and HTTPS 443", "Select other ports through macOS setup"},
+			"reload": {"~/Library/Application Support/sandbar/config.json"},
+			"status": {"login startup"},
+			"start":  {"on saved ports", "registers login startup", "<Homebrew prefix>/var/log/caddy.log"},
+			"stop":   {"unregisters login startup"},
+			"trust":  {"~/Library/Application Support/sandbar/state/root.crt"},
+		}
+	}
+	for command, want := range commands {
+		text, ok := helpText(command)
+		if !ok {
+			t.Fatalf("missing %s help", command)
+		}
+		for _, phrase := range want {
+			if !strings.Contains(text, phrase) {
+				t.Errorf("%s help missing %q", command, phrase)
+			}
+		}
+		if runtime.GOOS == "darwin" {
+			for _, phrase := range []string{"--user", "--migrate-config", "--migrate-state", "systemd", "journalctl", "boot startup"} {
+				if strings.Contains(text, phrase) {
+					t.Errorf("macOS %s help contains Linux instruction %q", command, phrase)
+				}
+			}
+		}
 	}
 }

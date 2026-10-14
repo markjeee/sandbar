@@ -4,13 +4,10 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -18,42 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 )
-
-type serviceState struct {
-	State      string
-	Boot       string
-	Diagnostic string
-}
-
-type serviceOperations interface {
-	Inspect() (serviceState, error)
-	Control(string, io.Writer, io.Writer) error
-	Validate(io.Writer, io.Writer) error
-}
-
-type installation struct {
-	ID       string            `json:"id"`
-	Binary   string            `json:"binary"`
-	Unit     string            `json:"unit"`
-	Fragment string            `json:"fragment"`
-	Config   string            `json:"config"`
-	Globals  string            `json:"globals"`
-	Source   string            `json:"source"`
-	State    string            `json:"state"`
-	Storage  string            `json:"storage"`
-	Account  string            `json:"account"`
-	UID      int               `json:"uid"`
-	GID      int               `json:"gid"`
-	GroupID  int               `json:"group_id"`
-	Service  serviceOperations `json:"-"`
-}
-
-func (i installation) identity() string {
-	data, _ := json.Marshal(i)
-	return string(data)
-}
 
 // Package discovery supplies layout. Service control does not infer package paths.
 func inspectInstallation() (*installation, error) {
@@ -147,30 +109,6 @@ func parseProperties(data []byte) (map[string]string, error) {
 	return fields, nil
 }
 
-func systemOutput(binary string, args ...string) ([]byte, error) {
-	var out, diagnostic bytes.Buffer
-	err := runBounded(binary, []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}, nil, &out, &diagnostic, args...)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w: %s", filepath.Base(binary), err, strings.TrimSpace(diagnostic.String()))
-	}
-	return out.Bytes(), nil
-}
-
-func runBounded(binary string, env []string, in io.Reader, out, errOut io.Writer, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Env = env
-	cmd.Stdin = in
-	cmd.Stdout = out
-	cmd.Stderr = errOut
-	err := cmd.Run()
-	if ctx.Err() != nil {
-		return fmt.Errorf("command timed out; service state is unknown: %w", ctx.Err())
-	}
-	return err
-}
-
 type systemdService struct{ unit, binary, candidate string }
 
 func (s *systemdService) Inspect() (serviceState, error) {
@@ -216,73 +154,6 @@ func (s *systemdService) Validate(out, errOut io.Writer) error {
 	return runBounded("/usr/bin/sudo", env, nil, out, errOut, append([]string{"-n", "-H", "-u", "caddy", "--", s.binary}, args...)...)
 }
 
-func installedPaths(i *installation) paths {
-	return paths{config: i.Source, state: i.State, installed: i}
-}
-func (p paths) rootCertificate() string {
-	if p.installed != nil {
-		return p.file("root.crt")
-	}
-	return p.file("caddy/pki/authorities/local/root.crt")
-}
-func (p paths) caID() string {
-	if p.installed != nil {
-		return "sandbar"
-	}
-	return "local"
-}
-func (p paths) generatedPath() string { return p.file("Caddyfile") }
-func (p paths) requireSetup() error {
-	if p.installed == nil {
-		return nil
-	}
-	data, err := os.ReadFile(p.file("setup.json"))
-	if err != nil {
-		return fmt.Errorf("service setup for Sandbar is missing or inaccessible; run sudo /absolute/path/to/sandbar setup --user <name>: %w", err)
-	}
-	var record setupRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return fmt.Errorf("invalid setup record: %w", err)
-	}
-	if record.Identity != p.installed.identity() {
-		return errors.New("the Caddy installation differs from setup; review sandbar setup --check --user <name>")
-	}
-	return nil
-}
-
-func (p paths) writeFile(path string, data []byte) error {
-	mode := os.FileMode(0600)
-	if p.installed != nil {
-		mode = 0660
-	}
-	return atomicWriteMode(path, data, mode, -1, -1)
-}
-func atomicWriteMode(path string, data []byte, mode os.FileMode, uid, gid int) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".sandbar-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err := file.Chmod(mode); err != nil {
-		file.Close()
-		return err
-	}
-	if uid >= 0 || gid >= 0 {
-		if err := file.Chown(uid, gid); err != nil {
-			file.Close()
-			return err
-		}
-	}
-	_, writeErr := file.Write(data)
-	if err := errors.Join(writeErr, file.Sync(), file.Close()); err != nil {
-		return err
-	}
-	if err := os.Rename(file.Name(), path); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(path))
-}
-
 var serviceArgvPattern = regexp.MustCompile(`argv\[\]=(.*?) ; ignore_errors=`)
 
 func checkServiceCommands(fields map[string]string) error {
@@ -312,29 +183,38 @@ func serviceArgv(value string) (string, error) {
 	return matches[0][1], nil
 }
 
-func createSelectedConfig(p paths, c config) error {
-	if p.installed == nil {
-		return writeConfig(p.config, c)
-	}
-	data, err := configBytes(c)
-	if err != nil {
-		return err
-	}
-	file, err := os.OpenFile(p.config, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0660)
-	if err != nil {
-		return fmt.Errorf("create shared configuration: %w", err)
-	}
-	if err := file.Chmod(0660); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Chown(-1, p.installed.GroupID); err != nil {
-		file.Close()
-		return err
-	}
-	_, writeErr := file.Write(data)
-	if err := errors.Join(writeErr, file.Sync(), file.Close()); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(p.config))
+const installedFileMode os.FileMode = 0660
+const installedDirectoryMode os.FileMode = 0770 | os.ModeSetgid
+const installedSocketMode = "0660"
+const socketPathLimit = 107
+const startupLabel = "Boot startup"
+const setupCommand = "sudo /absolute/path/to/sandbar setup --user <name>"
+
+func installedLogGuidance(i *installation) string { return "journalctl -u caddy.service" }
+func installedCaddyEnv(i *installation) []string  { return os.Environ() }
+
+func installedRootCertificate(i *installation) string {
+	return filepath.Join(i.State, "root.crt")
 }
+
+const registerLoginStartup = false
+
+func systemOutput(binary string, args ...string) ([]byte, error) {
+	var out, diagnostic bytes.Buffer
+	err := runBounded(binary, []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}, nil, &out, &diagnostic, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w: %s", filepath.Base(binary), err, strings.TrimSpace(diagnostic.String()))
+	}
+	return out.Bytes(), nil
+}
+
+func waitForInstalledStartup(p paths, c config) error { return nil }
+
+func validateInstalledPorts(c config) error {
+	if c.HTTPPort != 80 || c.HTTPSPort != 443 {
+		return errors.New("installed Sandbar uses Caddy ports 80 and 443; use --home for development port overrides")
+	}
+	return nil
+}
+
+const customInstalledPorts = false

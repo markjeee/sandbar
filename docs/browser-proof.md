@@ -1,6 +1,8 @@
 # Isolated Chrome browser proof
 
 This guide checks real Caddy routing and Chrome trust on Ubuntu 24.04 with native Google Chrome.
+Its Linux NSS isolation does not apply to macOS keychains.
+For macOS, use the separate [installation browser checklist](browser-trust.md#macos-browser-acceptance) after explicit installation and trust requests.
 It uses generic backend content, temporary Sandbar homes, high ports, and Chrome DevTools MCP.
 Run it as a normal user with the checkout version installed as `sandbar` in PATH.
 Stop at any unexpected failure. Keep test state until its processes stop.

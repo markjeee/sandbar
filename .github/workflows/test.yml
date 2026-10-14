@@ -12,11 +12,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.27.2'
           cache: false
+      - name: Assert native Linux target
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          test "$(go env GOOS)/$(go env GOARCH)" = linux/amd64
       - name: Install Caddy v2.11.7
         shell: bash
         run: |
@@ -42,9 +47,56 @@ jobs:
         run: scripts/check --integration
       - name: Save coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-coverage
+          path: .sandbox/check/coverage.out
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  macos:
+    # GitHub's standard macos-15 runner is arm64. Assert it before building.
+    # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Assert native macOS target
+        run: |
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(go env GOOS)/$(go env GOARCH)" = darwin/arm64
+      - name: Install Caddy v2.11.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=https://github.com/caddyserver/caddy/releases/download/v2.11.7
+          archive=caddy_2.11.7_mac_arm64.tar.gz
+          curl -fsSLO "$release/$archive"
+          curl -fsSLO "$release/caddy_2.11.7_checksums.txt"
+          awk -v archive="$archive" '
+            $2 == archive {
+              if (NF != 2 || length($1) != 128 || $1 ~ /[^0-9a-fA-F]/) exit 1
+              print $1 "  " $2
+              count++
+            }
+            END { if (count != 1) exit 1 }
+          ' caddy_2.11.7_checksums.txt > selected-checksum.txt
+          shasum -a 512 -c selected-checksum.txt
+          mkdir -p "$RUNNER_TEMP/caddy-bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/caddy-bin" caddy
+          echo "$RUNNER_TEMP/caddy-bin" >> "$GITHUB_PATH"
+      - name: Go validation and native Caddy acceptance
+        run: scripts/check --integration
+      - name: Save coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-arm64-coverage
           path: .sandbox/check/coverage.out
           include-hidden-files: true
           if-no-files-found: ignore
@@ -53,8 +105,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.27.2'
           cache: false
@@ -97,7 +149,7 @@ jobs:
           sudo journalctl -u caddy.service --no-pager > .sandbox/service/evidence/caddy-journal.log
       - name: Upload service evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ubuntu-service-evidence
           path: .sandbox/service/evidence

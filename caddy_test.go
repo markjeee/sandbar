@@ -17,7 +17,17 @@ import (
 
 func shortHome(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "sb-")
+	base, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(base)+60 > socketPathLimit {
+		base, err = filepath.EvalSymlinks("/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir, err := os.MkdirTemp(base, "sb-")
 	if err != nil {
 		t.Fatal(err)
 	}

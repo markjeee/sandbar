@@ -10,7 +10,15 @@ case "$#:$*" in
     *) echo "Usage: scripts/check [--integration]" >&2; exit 1 ;;
 esac
 
-project_dir=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
+case "$(uname -s):$(uname -m)" in
+    Linux:x86_64|Linux:amd64) target_os=linux; target_arch=amd64 ;;
+    Darwin:arm64) target_os=darwin; target_arch=arm64 ;;
+    *) echo 'Checks require Linux amd64 or macOS arm64.' >&2; exit 1 ;;
+esac
+# Prevent environment overrides from turning native validation into cross builds.
+export GOOS="$target_os" GOARCH="$target_arch"
+
+project_dir=$(CDPATH='' cd -P "$(dirname "$0")/.." && pwd)
 cd "$project_dir"
 check_dir="$project_dir/.sandbox/check"
 tool_dir="$project_dir/.sandbox/tools"
@@ -69,6 +77,7 @@ SANDBAR_INTEGRATION=0 go test -run='^$' -fuzz='^FuzzConfig$' -fuzztime=10s \
 printf '%s\n' 'Checking reachable Go vulnerabilities'
 "$tool_dir/govulncheck" ./...
 
-printf '%s\n' 'Building the static Linux executable'
+printf 'Building the native %s/%s executable\n' "$target_os" "$target_arch"
 CGO_ENABLED=0 go build -trimpath -o "$check_dir/sandbar" .
+scripts/release --version v0.1.0-beta.3-candidate
 printf 'Checks passed. Coverage: %s/coverage.out\n' "$check_dir"

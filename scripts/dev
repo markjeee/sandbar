@@ -12,7 +12,13 @@ case "$1" in
     *) echo "Usage: scripts/dev {init|start|stop}" >&2; exit 1 ;;
 esac
 
-project_dir=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
+case "$(uname -s):$(uname -m)" in
+    Linux:x86_64|Linux:amd64) target_os=linux; target_arch=amd64 ;;
+    Darwin:arm64) target_os=darwin; target_arch=arm64 ;;
+    *) echo 'Development requires Linux amd64 or macOS arm64.' >&2; exit 1 ;;
+esac
+
+project_dir=$(CDPATH='' cd -P "$(dirname "$0")/.." && pwd)
 sandbox_home="$project_dir/.sandbox"
 sandbox_binary="$sandbox_home/sandbar"
 
@@ -26,7 +32,7 @@ fi
 
 cd "$project_dir"
 mkdir -p "$sandbox_home"
-CGO_ENABLED=0 go build -o "$sandbox_binary" .
+CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -o "$sandbox_binary" .
 "$sandbox_binary" --home "$sandbox_home" init \
     --http-port 18080 --https-port 18443 dev.sandbar.localhost 18000
 

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 )
@@ -14,6 +16,10 @@ func invokeSelectedCaddy(p paths, env []string, in io.Reader, out, errOut io.Wri
 		return invokeCaddy(env, in, out, errOut, args...)
 	}
 	if err := runBounded(p.installed.Binary, env, in, out, errOut, args...); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() > 0 {
+			return &caddyError{exit.ExitCode(), fmt.Errorf("caddy %s: %w", args[0], err)}
+		}
 		return fmt.Errorf("caddy %s: %w", args[0], err)
 	}
 	return nil
@@ -72,7 +78,7 @@ func checkAcceptedInputs(p paths) error {
 		return errors.New("the Caddy installation differs from setup; review setup before changing routes")
 	}
 	if err := verifyInputManifest(record.Manifest); err != nil {
-		return fmt.Errorf("the Caddy configuration changed; review sandbar setup --check --user <name>: %w", err)
+		return fmt.Errorf("the Caddy configuration changed; review %s --check: %w", setupCommand, err)
 	}
 	return nil
 }
@@ -121,6 +127,23 @@ func startInstalled(p paths, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if registerLoginStartup && state.Boot != "enabled" {
+			if err := configurationStatus(c, p, active, nil, out, errOut); err != nil {
+				return err
+			}
+			generated, err := os.ReadFile(p.generatedPath())
+			if err != nil {
+				return err
+			}
+			if _, err := installedCandidate(p, generated, c, out, errOut); err != nil {
+				return err
+			}
+			if err := p.installed.Service.Control("start", out, errOut); err != nil {
+				return fmt.Errorf("register Caddy login startup: %w", err)
+			}
+			fmt.Fprintln(out, "Login startup: enabled")
+			return nil
+		}
 		fmt.Fprintln(out, "Caddy is already running. Use sandbar reload to apply pending changes.")
 		return configurationStatus(c, p, active, nil, out, errOut)
 	}
@@ -131,10 +154,13 @@ func startInstalled(p paths, out, errOut io.Writer) error {
 		return err
 	}
 	if err := p.installed.Service.Control("start", out, errOut); err != nil {
-		return fmt.Errorf("start Caddy: %w; see journalctl -u caddy.service", err)
+		return fmt.Errorf("start Caddy: %w; see %s", err, installedLogGuidance(p.installed))
 	}
 	c, err := readConfig(p.config)
 	if err != nil {
+		return err
+	}
+	if err := waitForInstalledStartup(p, c); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "HTTPS:", c.routeURL("sandbar.localhost"))
@@ -142,7 +168,7 @@ func startInstalled(p paths, out, errOut io.Writer) error {
 		fmt.Fprintln(out, "HTTPS:", c.routeURL(r.Hostname))
 	}
 	fmt.Fprintln(out, "Root certificate:", p.rootCertificate())
-	fmt.Fprintln(out, "Caddy logs: journalctl -u caddy.service")
+	fmt.Fprintln(out, "Caddy logs:", installedLogGuidance(p.installed))
 	return nil
 }
 

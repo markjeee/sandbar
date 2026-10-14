@@ -284,10 +284,7 @@ func TestIntegrationLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	pid := strings.TrimSpace(string(pidData))
-	executable, err := os.Readlink("/proc/" + pid + "/exe")
-	if err != nil || filepath.Base(executable) != "caddy" {
-		t.Fatalf("persistent process: %s %v", executable, err)
-	}
+	checkProcessEvidence(t, pid)
 	checkListenerEvidence(t, c, pid)
 	t.Run("non-loopback", func(t *testing.T) { checkNonLoopback(t, c) })
 	t.Run("IPv6", func(t *testing.T) {
@@ -327,6 +324,7 @@ func TestIntegrationLifecycle(t *testing.T) {
 		t.Fatalf("stop: %d %s", code, output)
 	}
 	waitForClosed(t, c.HTTPPort, c.HTTPSPort)
+	checkListenerClosure(t, c.HTTPPort, c.HTTPSPort)
 	response, _ = getResponse(t, otherClient, otherConfig.httpsURL())
 	if response.StatusCode != 200 {
 		t.Fatal("other instance was affected")
@@ -361,66 +359,6 @@ func TestIntegrationLifecycle(t *testing.T) {
 		}
 	}
 	t.Logf("native lifecycle verified with Caddy PID %s; Sandbar invocations exited before requests", pid)
-}
-
-func checkListenerEvidence(t *testing.T, c config, pid string) {
-	t.Helper()
-	output, err := exec.Command("ss", "-H", "-ltnp").CombinedOutput()
-	if err != nil {
-		t.Fatalf("ss required: %v %s", err, output)
-	}
-	seen := map[string]bool{}
-	for _, line := range strings.Split(string(output), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		address := fields[3]
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			continue
-		}
-		if port != strconv.Itoa(c.HTTPPort) && port != strconv.Itoa(c.HTTPSPort) {
-			continue
-		}
-		if host != "127.0.0.1" && host != "::1" {
-			t.Fatalf("non-loopback listener: %s", line)
-		}
-		if !strings.Contains(line, "pid="+pid+",") {
-			t.Fatalf("listener is not owned by Caddy: %s", line)
-		}
-		seen[address] = true
-		t.Log(line)
-	}
-	ips := []string{"127.0.0.1"}
-	available, err := ipv6Available(probeIPv6, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if available {
-		ips = append(ips, "::1")
-	}
-	for _, ip := range ips {
-		for _, port := range []int{c.HTTPPort, c.HTTPSPort} {
-			if !seen[net.JoinHostPort(ip, strconv.Itoa(port))] {
-				t.Fatalf("missing listener: %s:%d", ip, port)
-			}
-		}
-	}
-	output, err = exec.Command("ss", "-H", "-lun").CombinedOutput()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, line := range strings.Split(string(output), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		_, port, _ := net.SplitHostPort(fields[3])
-		if port == strconv.Itoa(c.HTTPPort) || port == strconv.Itoa(c.HTTPSPort) {
-			t.Fatalf("unexpected UDP listener: %s", line)
-		}
-	}
 }
 
 func checkNonLoopback(t *testing.T, c config) {
@@ -471,6 +409,7 @@ func TestIntegrationPortConflicts(t *testing.T) {
 			}
 			listener.Close()
 			waitForClosed(t, c.HTTPPort, c.HTTPSPort)
+			checkListenerClosure(t, c.HTTPPort, c.HTTPSPort)
 		})
 	}
 }
