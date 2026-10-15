@@ -3,7 +3,7 @@
 set -eu
 umask 077
 
-version='v0.1.0-beta.3'
+version='v0.1.0-beta.4'
 case "$(uname -s):$(uname -m)" in
     Linux:x86_64|Linux:amd64) target_os=linux; target_arch=amd64; bin_dir=${HOME:?HOME must select your user directory}/.local/bin ;;
     Darwin:arm64) target_os=darwin; target_arch=arm64; bin_dir=/usr/local/bin ;;

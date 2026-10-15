@@ -1,7 +1,7 @@
 # Teleport
 
 Teleport exposes a prepared Sandbar machine through local Caddy and a background SSH connection.
-Both machines must run Teleport-capable Sandbar. Configure remote Caddy and apps before registration.
+Both machines need beta.3 or another Teleport-capable Sandbar. Configure remote Caddy and apps before registration.
 Registration reads public metadata. It does not configure the remote service or apps.
 
 ## Machine URLs
@@ -121,7 +121,7 @@ Remote app failures still need remote service and app checks. See [diagnostic re
 
 ## Uninstall and fresh setup
 
-The checkout's `sandbar uninstall --check` previews removal of the local installed integration. Beta.3 does not include uninstall.
+Beta.4 provides `sandbar uninstall --check` to preview removal of the local installed integration.
 `sandbar uninstall --yes` disconnects owned current-user connections before removing local registrations, proxy trust, dedicated SSH files, logs, and control sockets.
 Absent connections need no SSH agent. Foreign ownership or unknown connection state blocks cleanup before mutation.
 Untrust failure preserves local configuration and CA material, but connections already disconnected remain disconnected.

@@ -4,8 +4,9 @@ Browser acceptance targets native Google Chrome on Ubuntu 24.04 and macOS arm64.
 Use a local HTTP backend and one configured `<name>.sandbar.localhost` route.
 NetBox is an optional application example. Sandbar needs no NetBox-specific settings or code.
 Firefox, Java, and other browser package formats are outside this acceptance target.
-macOS support is available from the unreleased checkout. Published beta.2 is Linux-only.
-Real macOS service, browser trust, trust removal, and login acceptance remain pending until separately checked.
+Beta.4 supports both platforms. Beta.1 and beta.2 assets remain Linux-only.
+Native tests and package checks do not establish browser trust or manual trust removal.
+Actual macOS startup after logout/login remains deferred in acceptance.
 
 ## Start and request trust
 
@@ -182,8 +183,7 @@ Successful `untrust` alone does not prove that Chrome or every other store stopp
 
 ## Trust and uninstall
 
-The checkout's `sandbar uninstall --check` previews installed cleanup without changing trust.
-Published beta.3 does not provide uninstall. See [installed removal](install.md#uninstall-installed-sandbar) for confirmation and platform permissions.
+Beta.4 provides `sandbar uninstall --check` to preview installed cleanup without changing trust. See [installed removal](install.md#uninstall-installed-sandbar) for confirmation and platform permissions.
 `sandbar uninstall --yes` disconnects owned Teleport connections, then delegates exact-root untrust in your current trust environment.
 Run it as your normal user. Linux sudo authorization covers protected inspection and system cleanup, not a switch to root's trust stores.
 

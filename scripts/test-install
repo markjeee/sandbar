@@ -9,7 +9,7 @@ case "$(uname -s):$(uname -m)" in
     Darwin:arm64) target_os=darwin; target_arch=arm64; native_system=Darwin; native_machine=arm64 ;;
     *) echo 'Installer tests require Linux amd64 or macOS arm64.' >&2; exit 1 ;;
 esac
-version=v0.1.0-beta.3-candidate
+version=v0.1.0-beta.4-candidate
 asset="sandbar_${version}_${target_os}_${target_arch}"
 archive="$asset.tar.gz"
 # Test homes select install destinations, while Go keeps the caller's caches.
@@ -78,24 +78,24 @@ fi
 grep "GOARCH=$target_arch" "$test_dir/build-info" >/dev/null || fail 'candidate architecture'
 grep "GOOS=$target_os" "$test_dir/build-info" >/dev/null || fail 'candidate operating system'
 
-printf '%s\n' 'Preparing beta.3 assets with authored notes'
-release_version=v0.1.0-beta.3
+printf '%s\n' 'Preparing beta.4 assets with authored notes'
+release_version=v0.1.0-beta.4
 release_asset="sandbar_${release_version}_${target_os}_${target_arch}"
 release_archive="$release_asset.tar.gz"
-"$project_dir/scripts/release" "$test_dir/release" > "$test_dir/output.log" 2>&1 || fail 'default beta.3 build'
-(cd "$test_dir/release" && check_checksums) > "$test_dir/output.log" 2>&1 || fail 'beta.3 checksums'
-[ "$("$test_dir/release/$release_asset" --version)" = "sandbar $release_version" ] || fail 'beta.3 executable version'
-cmp "$project_dir/install.sh" "$test_dir/release/install.sh" || fail 'beta.3 installer pin'
+"$project_dir/scripts/release" "$test_dir/release" > "$test_dir/output.log" 2>&1 || fail 'default beta.4 build'
+(cd "$test_dir/release" && check_checksums) > "$test_dir/output.log" 2>&1 || fail 'beta.4 checksums'
+[ "$("$test_dir/release/$release_asset" --version)" = "sandbar $release_version" ] || fail 'beta.4 executable version'
+cmp "$project_dir/install.sh" "$test_dir/release/install.sh" || fail 'beta.4 installer pin'
 cmp "$project_dir/docs/releases/$release_version.md" "$test_dir/release/RELEASE_NOTES.md" || fail 'default authored release notes'
 mkdir "$test_dir/release-contents"
 tar -xzf "$test_dir/release/$release_archive" -C "$test_dir/release-contents"
 for shared_file in install.sh RELEASE_NOTES.md LICENSE; do
     if [ "$shared_file" = LICENSE ]; then expected_file="$project_dir/LICENSE"; else expected_file="$test_dir/release/$shared_file"; fi
-    cmp "$expected_file" "$test_dir/release-contents/$shared_file" || fail 'beta.3 shared archive content'
+    cmp "$expected_file" "$test_dir/release-contents/$shared_file" || fail 'beta.4 shared archive content'
 done
-"$project_dir/scripts/release" --version "$release_version" "$test_dir/explicit-release" > "$test_dir/output.log" 2>&1 || fail 'explicit beta.3 build'
+"$project_dir/scripts/release" --version "$release_version" "$test_dir/explicit-release" > "$test_dir/output.log" 2>&1 || fail 'explicit beta.4 build'
 cmp "$test_dir/release/RELEASE_NOTES.md" "$test_dir/explicit-release/RELEASE_NOTES.md" || fail 'explicit version ignored authored notes'
-for old_version in v0.1.0-beta.1 v0.1.0-beta.2; do
+for old_version in v0.1.0-beta.1 v0.1.0-beta.2 v0.1.0-beta.3; do
     expect_failure "$project_dir/scripts/release" --version "$old_version" "$test_dir/old-release"
     [ ! -e "$test_dir/old-release" ] || fail 'old release packaging wrote assets'
 done
@@ -174,18 +174,18 @@ echo 'controlled build failure' >&2
 exit 1
 GO
 chmod 755 "$test_dir/tools/go"
-printf '%s\n' 'Testing piped beta.3 installation and checksum failure without Go'
+printf '%s\n' 'Testing piped beta.4 installation and checksum failure without Go'
 FAKE_RELEASE_DIR="$test_dir/release"
 FAKE_VERSION=$release_version
 FAKE_ARCHIVE=$release_archive
-beta3_install() {
+release_install() {
     cat "$project_dir/install.sh" | HOME="$test_dir/remote home" sh -s -- --bin-dir "$test_dir/bin"
 }
-beta3_install > "$test_dir/output.log" 2>&1 || fail 'beta.3 download installation'
-[ "$("$test_dir/bin/sandbar" --version)" = "sandbar $release_version" ] || fail 'beta.3 downloaded version'
+release_install > "$test_dir/output.log" 2>&1 || fail 'beta.4 download installation'
+[ "$("$test_dir/bin/sandbar" --version)" = "sandbar $release_version" ] || fail 'beta.4 downloaded version'
 cp "$test_dir/previous" "$test_dir/bin/sandbar"
 printf 'damaged package\n' >> "$test_dir/release/$release_archive"
-expect_failure beta3_install
+expect_failure release_install
 assert_preserved
 FAKE_RELEASE_DIR="$test_dir/fixtures"
 FAKE_VERSION=$version

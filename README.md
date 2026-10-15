@@ -1,24 +1,23 @@
 <!-- Editors: Use plain English. Keep this file within 100 lines. Put users first. Keep progress reports and detailed procedures out. -->
 # Sandbar
 
-Sandbar gives local apps HTTPS names such as `https://app.sandbar.localhost`. Teleport reaches another Sandbar machine's apps through your local Caddy and SSH.
-Add, change, and remove app names while Caddy runs. Sandbar exits after each command. Caddy keeps running.
+Sandbar gives local apps HTTPS names such as `https://app.sandbar.localhost`. Teleport reaches another Sandbar machine's apps through your local Caddy and SSH. Add, change, and remove app names while Caddy runs. Sandbar exits after each command. Caddy keeps running.
 
 ## Install
 
 Use Linux amd64 with apt Caddy and systemd, or macOS arm64 with Homebrew Caddy and Sandbar's user LaunchAgent. Install [Caddy](https://caddyserver.com/docs/install) v2.11.7 or a later v2 release separately.
 Linux also needs Polkit and sudo. Ubuntu 24.04 is its acceptance target.
 
-Install beta.3 on either platform with the versioned installer. macOS packages are unsigned and unnotarized:
+Install beta.4 on either platform with the versioned installer. macOS packages are unsigned and unnotarized:
 
 ```sh
-curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.3/install.sh | sh
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.4/install.sh | sh
 ```
 
 macOS installs a regular executable at `/usr/local/bin/sandbar`. Linux defaults to `~/.local/bin/sandbar`. Add that directory to `PATH`.
 
 Use `--bin-dir <directory>` for another destination. The installer requests macOS administrator access only for executable publication. It does not install Caddy, start services, change trust, or edit shell profiles.
-See [installation and upgrades](docs/install.md) for prerequisites, explicit setup, version 3 backups and rollback, and beta.1 migration.
+See [installation and upgrades](docs/install.md) for prerequisites, explicit setup, backups, and rollback. Beta.3 upgrades need only executable replacement.
 
 ## Set up Caddy
 
@@ -64,9 +63,11 @@ Apps must accept their machine URLs. Review allowed hosts, CSRF, redirects, cook
 | `sandbar add --replace app.sandbar.localhost 8001` | Change an app's address. |
 | `sandbar ls` / `sandbar rm app.sandbar.localhost` | List apps / remove a name. |
 | `sandbar reload` | Check and apply manual app-list edits. |
+| `sandbar config --path` / `sandbar config --print` | Show the source path / exact source bytes. |
+| `sandbar status` / `sandbar doctor` | Inspect the router and Teleport / diagnose configuration, HTTPS, and trust. |
 | `sandbar start` / `sandbar stop` | Start Caddy / stop every Caddy route. |
 | `sandbar untrust` | Request certificate trust removal. |
-| `sandbar uninstall --check` / `sandbar uninstall --yes` | Preview / confirm installed cleanup, keeping the CLI. Checkout only, absent from beta.3. [Removal guide](docs/install.md#uninstall-installed-sandbar). |
+| `sandbar uninstall --check` / `sandbar uninstall --yes` | Preview / confirm installed cleanup, keeping the CLI. [Removal guide](docs/install.md#uninstall-installed-sandbar). |
 | `sandbar <command> --help` | Show options and examples. |
 
 Linux stop keeps boot startup enabled. macOS stop unregisters login startup. Start registers it again. See the [user reference](docs/reference.md) for paths, logs, status, and recovery.
@@ -74,8 +75,7 @@ Linux stop keeps boot startup enabled. macOS stop unregisters login startup. Sta
 ## Teleport to another machine
 
 Prepare remote Caddy and `app.sandbar.localhost` first. Both peers need beta.3 or another Teleport-capable build and completed setup.
-This example assumes direct SSH alias `work`, remote machine name `work`, and HTTPS 443 on both machines. Use your existing SSH agent with keys loaded. Sandbar keeps dedicated SSH files under its configuration directory and does not manage keys or forward the agent.
-On the connecting machine, run `sandbar teleport register work`.
+This example assumes direct SSH alias `work`, remote machine name `work`, and HTTPS 443 on both machines. Use your existing SSH agent with keys loaded. Sandbar keeps dedicated SSH files under its configuration directory and does not manage keys or forward the agent. On the connecting machine, run `sandbar teleport register work`.
 
 Registration saves the destination, then calls connect. Open `https://app.sandbar-work.localhost` in the connecting machine's browser.
 If SSH cannot find Sandbar, add `--remote-bin <absolute-path>` before `work`. See [Teleport](docs/teleport.md) for options and app settings.

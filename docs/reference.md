@@ -1,6 +1,6 @@
 # Sandbar user reference
 
-These commands describe apt/systemd on Linux and unreleased Homebrew Caddy with a Sandbar-managed user LaunchAgent on macOS arm64.
+These beta.4 commands describe apt/systemd on Linux and Homebrew Caddy with a Sandbar-managed user LaunchAgent on macOS arm64.
 Beta.1 uses a private user router. See [installation and migration](install.md) before upgrading.
 
 ## App names and addresses
@@ -287,8 +287,7 @@ For one-time setup or migration failures, use the separate [manual recovery guid
 
 ## Installed removal
 
-The checkout provides `sandbar uninstall --check` for read-only preview and `sandbar uninstall --yes` for confirmed cleanup.
-Published beta.3 does not include uninstall. Run the command as your normal user without `--home` or `SANDBAR_HOME`.
+Beta.4 provides `sandbar uninstall --check` for read-only preview and `sandbar uninstall --yes` for confirmed cleanup. Run the command as your normal user without `--home` or `SANDBAR_HOME`.
 Linux requests ordinary administrator authorization for protected inspection and system cleanup. Trust and SSH actions retain the caller's environment.
 The command keeps the CLI and refuses before mutation when the selected Caddy serves unrelated sites.
 It removes saved routes, identity, registrations, owned runtime files, integration, backups, and the selected CA after successful untrust and shutdown.
