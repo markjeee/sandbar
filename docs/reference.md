@@ -45,6 +45,35 @@ The `local.sandbar.caddy` job owns HTTP TCP and HTTPS TCP/UDP loopback sockets.
 Stop unloads this job and releases its sockets. Requests cannot restart it after a successful stop.
 Start uses the retained private template to restore the login copy. Reload retains the job and Caddy PID.
 
+## Inspect and diagnose
+
+| Command | Purpose |
+| --- | --- |
+| `sandbar config --path` | Print the absolute source path, including before setup. |
+| `sandbar config --print` | Print the exact source bytes, including readable invalid JSON. |
+| `sandbar status` | Summarize local service, routes, pending state, and current-user Teleport connections. |
+| `sandbar doctor` | Check configuration, listeners, resolution, HTTPS, trust, and Teleport transport separately. |
+
+These commands observe state without creating files, changing permissions, repairing state, or opening SSH connections.
+They do not change services or trust stores. Normal HTTPS requests can still cause server logs or certificate issuance.
+Observations are snapshots and can become stale during concurrent changes.
+
+Use exactly one config option. Missing or unreadable source makes `config --print` fail with its path.
+Printing does not validate, normalize, upgrade, or substitute generated configuration.
+Both config operations work without Caddy. `config --path` does not require an existing source file.
+
+```sh
+sandbar config --path
+sandbar config --print
+sandbar --home .sandbox/home config --path
+sandbar --home .sandbox/home config --print
+sandbar --home .sandbox/home status
+sandbar --home .sandbox/home doctor
+```
+
+Global `--home` takes priority over `SANDBAR_HOME`. Without either, use the installed platform source.
+Relative homes print as absolute paths. Suggested corrective commands retain the absolute selected home, with shell quoting.
+
 ## Read status results
 
 `status` reports service state, startup registration, and access to Caddy's private control socket.
@@ -60,11 +89,56 @@ It does not follow redirects. Stopped routers report apps as unchecked.
 HTTP codes appear separately from TLS and connection errors.
 HTTP 5xx means failure. Other HTTP responses show reachability, not application health.
 
+Status also lists registered Teleport machines in name order, with their local welcome URLs and current-user SSH connection states.
+`connected` means the existing SSH control check passed. It does not prove forwarded HTTPS or remote app health.
+`disconnected` means no control connection exists and includes an explicit `teleport connect` command.
+`unknown` includes the reason inspection could not establish the state. It does not mean connected or healthy.
+Disconnected and unknown destinations alone do not change the exit code. Status never connects them.
+
 The exit code is nonzero for stopped or inaccessible routers, incomplete startup setup, pending configuration or recovery, or failed checks.
 Invalid configuration and missing required root certificates are errors.
 The built-in welcome page is separate from configured app checks.
 Status does not prove browser trust, system DNS resolution, or operating-system listeners.
 See the [browser guide](browser-trust.md) for explicit trust, manual imports, and removal.
+
+## Read doctor results
+
+Doctor continues independent checks when a prerequisite fails. Skipped checks identify the unavailable prerequisite.
+It does not reload configuration, resolve recovery, connect destinations, or request administrator access.
+Run suggested corrective commands separately after reviewing the result.
+
+| Result | Meaning | Exit contribution |
+| --- | --- | --- |
+| `pass` | The stated check succeeded. | None |
+| `failure` | A required input or attempted compatibility, service, connection, or TLS check failed. | Nonzero |
+| `warning` | An actionable condition, including a disconnected destination. | None |
+| `unknown` | Inspection cannot establish the result, including unavailable optional tools. | None |
+| `not applicable` | The selected mode or configuration does not use this check. | None |
+
+No failures observed does not mean every layer was verified. Missing or invalid source, incompatible Caddy, and incomplete setup are failures.
+Local HTTPS, private admin requests, and system resolution each have three-second bounds.
+Forwarded welcome requests have five-second bounds. Native and SSH subprocesses each have a 30-second bound.
+Total time grows with configured routes and destinations. Doctor does not retry automatically.
+
+System resolution reports addresses or errors separately from direct IPv4 and available IPv6 loopback HTTPS.
+Direct local checks send `HEAD /`, retain the configured hostname, bypass proxies, and do not follow redirects.
+HTTP 5xx indicates failure. Other responses show reachability, not app health.
+Unsupported IPv6 alone does not fail an explicitly IPv4-only router.
+
+Doctor prints the public CA path and SHA-256 certificate fingerprint.
+It separates selected-root verification from the current process's system verifier.
+Neither result proves browser trust. Use explicit `sandbar trust` and the [browser guide](browser-trust.md) when appropriate.
+A private home selects its CA but does not isolate trust stores.
+
+Connected Teleport destinations receive a forwarded machine-welcome check with their saved CA and expected hostname.
+A successful SSH control check can coexist with a failed forwarded HTTPS check.
+Disconnected destinations skip the forwarded check and show the explicit selected-context connect command without causing failure alone.
+Doctor does not discover remote apps or prove their health.
+
+Native listener inspection reports available TCP and UDP ownership for selected ports.
+Launchd can own macOS sockets. Missing tools or owner access remain unknown without elevation or installation.
+Proxy observations name applicable environment variables without exposing their values or credentials.
+Direct checks cannot prove browser proxy behavior. Doctor does not audit every firewall or network policy or infer a specific firewall cause.
 
 ## Configuration
 

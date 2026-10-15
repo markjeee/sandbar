@@ -51,6 +51,10 @@ func privateSSHDir(path string) error {
 	if err := os.MkdirAll(path, 0700); err != nil {
 		return err
 	}
+	return checkPrivateSSHDir(path)
+}
+
+func checkPrivateSSHDir(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -243,25 +247,80 @@ func readTeleportPeer(configPath string, d teleportDestination, errOut io.Writer
 // https://github.com/openssh/openssh-portable/blob/V_10_3_P1/mux.c#L1236-L1266
 const sshControlSocketSuffixLength = 1 + 16
 
-func teleportRuntime(p paths, d teleportDestination) (string, string, error) {
+// Control paths are also used by observers that must not prepare runtime files.
+func teleportControlPaths(p paths, d teleportDestination) (string, string, error) {
 	base := p.state
 	if p.installed != nil && p.installed.ID == "apt-systemd-v1" {
-		// Installed Linux keeps writable command state beneath its work directory.
 		base = p.workDir()
 	}
 	dir := filepath.Join(base, "teleport", teleportID(d.Machine))
-	if err := privateSSHDir(dir); err != nil {
-		return "", "", err
-	}
 	socket := filepath.Join(dir, "control.sock")
 	if len(socket)+sshControlSocketSuffixLength > socketPathLimit {
 		base := filepath.Join("/tmp", fmt.Sprintf("sandbar-%d-%s", os.Getuid(), teleportID(filepath.Dir(p.config))))
-		if err := privateSSHDir(base); err != nil {
-			return "", "", err
-		}
 		socket = filepath.Join(base, teleportID(d.Machine)+".sock")
 	}
 	return socket, filepath.Join(dir, "ssh.log"), nil
+}
+
+func teleportRuntime(p paths, d teleportDestination) (string, string, error) {
+	socket, log, err := teleportControlPaths(p, d)
+	if err != nil {
+		return "", "", err
+	}
+	for _, dir := range []string{filepath.Dir(log), filepath.Dir(socket)} {
+		if err := privateSSHDir(dir); err != nil {
+			return "", "", err
+		}
+	}
+	return socket, log, nil
+}
+
+// Observe only the caller's existing control connection. No SSH agent is needed.
+func observeTeleport(p paths, d teleportDestination) (string, error) {
+	socket, _, err := teleportControlPaths(p, d)
+	if err != nil {
+		return "unknown", err
+	}
+	if err := checkPrivateSSHDir(filepath.Dir(socket)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "disconnected", nil
+		}
+		return "unknown", err
+	}
+	info, err := os.Lstat(socket)
+	if errors.Is(err, os.ErrNotExist) {
+		return "disconnected", nil
+	}
+	if err != nil {
+		return "unknown", err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0600 || int(st.Uid) != os.Getuid() {
+		return "unknown", fmt.Errorf("SSH control socket must be owned by the current user with mode 0600: %s", socket)
+	}
+	configPath := filepath.Join(filepath.Dir(p.config), "ssh", "config")
+	if err := checkPrivateSSHDir(filepath.Dir(configPath)); err != nil {
+		return "unknown", err
+	}
+	if _, err := os.Lstat(configPath); err != nil {
+		return "unknown", err
+	}
+	if err := checkPrivateSSHFile(configPath); err != nil {
+		return "unknown", err
+	}
+	var diagnostic bytes.Buffer
+	if err := runTeleportSSH(io.Discard, &diagnostic, "-F", configPath, "-S", socket, "-O", "check", teleportAlias(d)); err != nil {
+		text := strings.TrimSpace(diagnostic.String())
+		// OpenSSH uses these errors for a socket left after a closed master.
+		if strings.Contains(text, "Control socket connect(") && (strings.Contains(text, "Connection refused") || strings.Contains(text, "No such file or directory")) {
+			return "disconnected", nil
+		}
+		if text != "" {
+			return "unknown", fmt.Errorf("%w: %s", err, text)
+		}
+		return "unknown", err
+	}
+	return "connected", nil
 }
 
 func teleportMasterExists(configPath, socket string, d teleportDestination) bool {

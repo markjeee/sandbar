@@ -11,7 +11,7 @@ import (
 func TestCommandHelpBeforeSideEffects(t *testing.T) {
 	calls := fakeCaddy(t)
 	home := filepath.Join(shortHome(t), "not-created")
-	for _, command := range []string{"setup", "init", "add", "rm", "ls", "reload", "status", "start", "stop", "trust", "untrust"} {
+	for _, command := range []string{"setup", "init", "add", "rm", "ls", "reload", "config", "status", "doctor", "start", "stop", "trust", "untrust"} {
 		for _, option := range []string{"--help", "-h"} {
 			code, out, errOut := cli(t, "--home", home, command, option)
 			if code != 0 || errOut != "" || !strings.Contains(out, "Usage: sandbar "+command) || !strings.Contains(out, "Example:") && !strings.Contains(out, "Example: ") {
@@ -29,7 +29,7 @@ func TestCommandHelpBeforeSideEffects(t *testing.T) {
 func TestHelpDoesNotRequireValidPaths(t *testing.T) {
 	t.Setenv("SANDBAR_HOME", "invalid\npath")
 	t.Setenv("PATH", t.TempDir())
-	for _, args := range [][]string{nil, {"--help"}, {"help"}, {"status", "--help"}, {"setup", "--help"}} {
+	for _, args := range [][]string{nil, {"--help"}, {"help"}, {"status", "--help"}, {"config", "--help"}, {"doctor", "--help"}, {"setup", "--help"}} {
 		code, out, errOut := cli(t, args...)
 		if code != 0 || out == "" || errOut != "" {
 			t.Fatalf("%v: %d %q %q", args, code, out, errOut)
@@ -83,6 +83,23 @@ func TestHelpMatchesNativePlatform(t *testing.T) {
 					t.Errorf("macOS %s help contains Linux instruction %q", command, phrase)
 				}
 			}
+		}
+	}
+}
+
+func TestInspectionHelpExplainsLimits(t *testing.T) {
+	for command, phrases := range map[string][]string{
+		"config": {"exact bytes", "readable invalid JSON", "--path", "--print", "SANDBAR_HOME"},
+		"status": {"current-user SSH", "remote app health", "unknown destinations alone do not fail", "without creating files"},
+		"doctor": {"forwarded welcome HTTPS", "snapshot", "System trust and resolution", "unknown destinations alone do not fail", "separate user action"},
+	} {
+		for _, phrase := range phrases {
+			if !strings.Contains(commandHelp[command], phrase) {
+				t.Errorf("%s help missing %q", command, phrase)
+			}
+		}
+		if !strings.Contains(topLevelHelp(), command) {
+			t.Errorf("top-level help missing %s", command)
 		}
 	}
 }

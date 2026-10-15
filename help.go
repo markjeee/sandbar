@@ -16,7 +16,9 @@ Commands:
   rm        Remove an app name
   ls        List apps and their addresses
   reload    Apply changes made to the app list
-  status    Check Caddy and app connections
+  config    Show the source path or its exact contents
+  status    Check Caddy, apps, and Teleport connections
+  doctor    Diagnose configuration, HTTPS, trust, and connections
   start     Start Caddy
   stop      Stop Caddy and all its routes
   trust     Trust Sandbar's HTTPS certificates
@@ -58,6 +60,41 @@ func helpText(command string) (string, bool) {
 
 var commandHelp = map[string]string{
 	"teleport": teleportCommandHelp,
+	"config": `Show the selected source path or its exact contents without changing state.
+
+Usage: sandbar config (--path | --print)
+
+Options:
+  --path    Print the absolute source configuration path
+  --print   Print the source file's exact bytes, including readable invalid JSON
+
+Example: sandbar config --path
+Development: sandbar --home /tmp/sandbar-demo config --print
+
+Choose exactly one option. Extra arguments and unsupported options are errors.
+--home takes priority over SANDBAR_HOME. Without either, use the installed source.
+Path inspection works before setup. Printing missing or unreadable source fails.
+Neither option needs Caddy or creates files, changes permissions, or repairs state.
+This prints source, not generated or active Caddy configuration.
+`,
+	"doctor": `Diagnose the selected router without repairing state.
+
+Usage: sandbar doctor
+Example: sandbar doctor
+Development: sandbar --home /tmp/sandbar-demo doctor
+
+Accepts no arguments or options except help.
+--home takes priority over SANDBAR_HOME. Without either, inspect installed use.
+Checks source, Caddy, service, listeners, resolution, direct HTTPS, and trust.
+Connected Teleport destinations also receive a forwarded welcome HTTPS check.
+Each check is bounded. Results are a snapshot and can become stale.
+Failures return nonzero. Disconnected or unknown destinations alone do not fail.
+Disconnected destinations show an explicit connect command with the selected home.
+Corrective commands require a separate user action. Doctor never connects or repairs.
+Direct HTTPS bypasses proxies. System trust and resolution do not prove browser behavior.
+Optional listener inspection can remain unknown. Doctor does not audit every network policy.
+See docs/reference.md and docs/browser-trust.md for result meanings and manual checks.
+`,
 	"setup": platformHelp(`Connect Sandbar to apt-packaged Caddy and systemd on Linux amd64.
 
 Usage: sandbar setup --user <name> [options]
@@ -176,7 +213,7 @@ Example: sandbar reload
 ` + platformHelp("Installed app list: /etc/sandbar/config.json\n", "Installed app list: ~/Library/Application Support/sandbar/config.json\n") + `A rejected change keeps your edits for correction and leaves active routes working.
 Do not edit generated files. See the README for recovery and custom Caddy changes.
 `,
-	"status": `Check Caddy and each configured HTTPS app address.
+	"status": `Check Caddy, each configured HTTPS app address, and Teleport connections.
 
 Usage: sandbar status
 Example: sandbar status
@@ -184,6 +221,12 @@ Example: sandbar status
 ` + platformHelp("Reports service state, boot startup, access, pending changes, and saved recovery state.", "Reports Caddy process state, login registration, socket ownership, access, and pending changes or recovery.") + `
 App checks verify certificates and show HTTP codes or connection errors.
 HTTP 5xx is a failure. Other HTTP codes show reachability, not app health.
+Teleport reports sorted registered machines and current-user SSH connection state.
+Connected does not prove remote app health. Disconnected shows a connect command.
+Disconnected or unknown destinations alone do not fail status. Local failures still fail.
+Status reads without creating files, changing permissions, or repairing state.
+--home takes priority over SANDBAR_HOME. Without either, inspect installed use.
+Observations can become stale. Use doctor for deeper checks.
 This does not prove browser trust or name resolution. See docs/browser-trust.md.
 `,
 	"start": `Check configuration and start Caddy.

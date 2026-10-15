@@ -389,3 +389,85 @@ func TestStatusEmptyRouter(t *testing.T) {
 		t.Fatalf("%d %s %s", code, out, errOut)
 	}
 }
+
+func TestStatusTeleportIndependentOfLocalRoutes(t *testing.T) {
+	for _, state := range []string{"connected", "disconnected", "unknown"} {
+		for _, stopped := range []bool{false, true} {
+			t.Run(state+"/stopped="+strconv.FormatBool(stopped), func(t *testing.T) {
+				p, d, calls := observeFixture(t)
+				_, root := statusCertificate(t, machineHostname(d.Machine))
+				d.RootPEM, d.HTTPSPort, d.LocalPort = string(root), 443, 18444
+				c := config{Version: 3, Machine: "local", HTTPPort: 18080, HTTPSPort: 18443, Teleports: []teleportDestination{d}}
+				if state == "disconnected" {
+					// A second registration has never had a control directory.
+					c.Teleports[0].Machine = "disconnected"
+				}
+				if state == "unknown" {
+					if err := os.Chmod(filepath.Join(filepath.Dir(p.config), "ssh"), 0755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := writeConfig(p.config, c); err != nil {
+					t.Fatal(err)
+				}
+				statusGenerated(t, p, c)
+				if !stopped {
+					statusAdmin(t, p, `{}`)
+				}
+				// Keep fake SSH on PATH after adding fake Caddy.
+				sshPath := os.Getenv("PATH")
+				statusAdapt(t, `{}`)
+				t.Setenv("PATH", os.Getenv("PATH")+string(os.PathListSeparator)+sshPath)
+				if err := os.Chmod(filepath.Dir(p.config), 0750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(p.state, 0750); err != nil {
+					t.Fatal(err)
+				}
+				source := readTestFile(t, p.config)
+				sshConfig := filepath.Join(filepath.Dir(p.config), "ssh/config")
+				sshSource := readTestFile(t, sshConfig)
+				t.Setenv("SANDBAR_HOME", filepath.Dir(p.config))
+				code, out, errOut := cli(t, "status")
+				want := "Teleport: " + c.Teleports[0].Machine + " " + c.routeURL(machineHostname(c.Teleports[0].Machine)) + " " + state
+				if (code != 0) != stopped || !strings.Contains(out, want) || !strings.Contains(out, "Routes: none") {
+					t.Fatalf("%d %s %s", code, out, errOut)
+				}
+				if state == "disconnected" && !strings.Contains(out, selectedCommand(p, "teleport", "connect", c.Teleports[0].Machine)) {
+					t.Fatalf("missing selected-home connect command: %s", out)
+				}
+				if _, err := os.Stat(p.file("router.lock")); !os.IsNotExist(err) {
+					t.Fatalf("status created router lock: %v", err)
+				}
+				for _, path := range []string{filepath.Dir(p.config), p.state} {
+					info, err := os.Stat(path)
+					if err != nil || info.Mode().Perm() != 0750 {
+						t.Fatalf("status changed %s mode: %v %v", path, info, err)
+					}
+				}
+				if !bytes.Equal(readTestFile(t, p.config), source) || !bytes.Equal(readTestFile(t, sshConfig), sshSource) {
+					t.Fatal("status changed source or SSH configuration")
+				}
+				if state != "connected" {
+					if _, err := os.Stat(calls); !os.IsNotExist(err) {
+						t.Fatalf("status invoked SSH without usable control state: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestTeleportStatusSortsAndQuotesHome(t *testing.T) {
+	p := paths{config: filepath.Join(shortHome(t), "developer's home/config.json"), state: filepath.Join(shortHome(t), "state")}
+	c := config{HTTPSPort: 443, Teleports: []teleportDestination{{Machine: "zulu"}, {Machine: "alpha"}}}
+	var out bytes.Buffer
+	printTeleportStatus(p, c, &out)
+	text := out.String()
+	if strings.Index(text, "Teleport: alpha") >= strings.Index(text, "Teleport: zulu") || !strings.Contains(text, selectedCommand(p, "teleport", "connect", "alpha")) {
+		t.Fatal(text)
+	}
+	if _, err := os.Stat(filepath.Dir(p.config)); !os.IsNotExist(err) {
+		t.Fatalf("status prepared selected home: %v", err)
+	}
+}

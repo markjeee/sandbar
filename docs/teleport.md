@@ -110,4 +110,11 @@ Caddy issues local internal certificates for registered destination names, inclu
 It does not issue them for unrelated names.
 A registered destination with an unavailable connection returns Caddy's ordinary 502.
 An unknown destination follows normal unmatched-host behavior and can fail TLS before an HTTP response.
-There is no browser diagnostic page. Use `teleport ls` and `teleport connect <machine>` for connection management.
+There is no browser diagnostic page. Use `sandbar status` for a combined local and current-user Teleport summary.
+Use `sandbar doctor` to check SSH state and forwarded machine-welcome HTTPS separately.
+A connected SSH control session does not prove forwarded HTTPS or remote app health.
+Disconnected destinations show an explicit connect command and do not cause either command to fail for that condition alone.
+Unknown connection state includes its reason and alone does not fail either command.
+Both commands leave connections unchanged. Observations can become stale.
+Use `sandbar teleport connect <machine>` to connect explicitly, retaining any selected `--home`.
+Remote app failures still need remote service and app checks. See [diagnostic result meanings](reference.md#read-doctor-results).

@@ -2,16 +2,12 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
 )
@@ -70,6 +66,7 @@ func status(p paths, out, errOut io.Writer) error {
 		fmt.Fprintln(out, "Configuration: invalid:", err)
 		return errors.Join(append(failures, err)...)
 	}
+	printTeleportStatus(p, c, out)
 	if err := configurationStatus(c, p, active, adminErr, out, errOut); err != nil {
 		failures = append(failures, err)
 	}
@@ -171,39 +168,21 @@ type routeTLSError struct{ error }
 func (e *routeTLSError) Unwrap() error { return e.error }
 
 func checkHTTPSRoute(c config, r route, roots *x509.CertPool) (int, error) {
-	dialer := &net.Dialer{Timeout: time.Second}
-	transport := &http.Transport{
-		// Dial loopback directly, while retaining the configured name for TLS and HTTP.
-		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(c.HTTPSPort)))
-			if err != nil {
-				return nil, err
-			}
-			secured := tls.Client(conn, &tls.Config{RootCAs: roots, ServerName: r.Hostname, MinVersion: tls.VersionTLS12})
-			if err := secured.HandshakeContext(ctx); err != nil {
-				conn.Close()
-				return nil, &routeTLSError{err}
-			}
-			return secured, nil
-		},
-		ResponseHeaderTimeout: routeCheckTimeout,
+	return checkHTTPSAt(c, r.Hostname, "127.0.0.1", roots, routeCheckTimeout)
+}
+
+func printTeleportStatus(p paths, c config, out io.Writer) {
+	destinations := append([]teleportDestination(nil), c.Teleports...)
+	sort.Slice(destinations, func(i, j int) bool { return destinations[i].Machine < destinations[j].Machine })
+	for _, d := range destinations {
+		state, err := observeTeleport(p, d)
+		fmt.Fprintf(out, "Teleport: %s %s %s", d.Machine, c.routeURL(machineHostname(d.Machine)), state)
+		if err != nil {
+			fmt.Fprintf(out, " (%v)", err)
+		}
+		fmt.Fprintln(out)
+		if state == "disconnected" {
+			fmt.Fprintln(out, "  Connect:", selectedCommand(p, "teleport", "connect", d.Machine))
+		}
 	}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   routeCheckTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	request, err := http.NewRequest(http.MethodHead, c.routeURL(r.Hostname)+"/", nil)
-	if err != nil {
-		return 0, err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return 0, err
-	}
-	response.Body.Close()
-	return response.StatusCode, nil
 }

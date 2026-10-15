@@ -59,7 +59,7 @@ func execute(args []string, out, errOut io.Writer) error {
 		return nil
 	}
 	command, rest := flags.Arg(0), flags.Args()[1:]
-	if command != "init" && command != "start" && command != "stop" && command != "trust" && command != "untrust" && command != "add" && command != "rm" && command != "ls" && command != "reload" && command != "status" && command != "setup" && command != "teleport" {
+	if command != "init" && command != "start" && command != "stop" && command != "trust" && command != "untrust" && command != "add" && command != "rm" && command != "ls" && command != "reload" && command != "status" && command != "setup" && command != "teleport" && command != "config" && command != "doctor" {
 		return fmt.Errorf("unknown command %q (use --help)", command)
 	}
 	if command == "teleport" && commandHelpRequested(rest) {
@@ -79,6 +79,15 @@ func execute(args []string, out, errOut io.Writer) error {
 	})
 	if homeFlag && *home == "" {
 		return errors.New("--home requires a directory")
+	}
+	if command == "config" {
+		return inspectConfig(*home, rest, out, errOut)
+	}
+	if command == "doctor" {
+		if len(rest) != 0 {
+			return errors.New("doctor accepts no arguments")
+		}
+		return doctor(*home, out, errOut)
 	}
 	if command == "setup" {
 		if homeFlag || *home != "" {
@@ -105,6 +114,9 @@ func execute(args []string, out, errOut io.Writer) error {
 	if command == "init" {
 		return initialize(paths, rest, out, errOut)
 	}
+	if command == "status" {
+		return status(paths, out, errOut)
+	}
 	return withLock(paths, func() error {
 		switch command {
 		case "start":
@@ -113,8 +125,6 @@ func execute(args []string, out, errOut io.Writer) error {
 			return changeRoutes(paths, command, rest, out, errOut)
 		case "ls":
 			return listRoutes(paths, out)
-		case "status":
-			return status(paths, out, errOut)
 		case "stop":
 			return stop(paths, out, errOut)
 		default:
