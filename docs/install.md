@@ -162,7 +162,7 @@ The static welcome page needs no backend and remains after removing the final ap
 Service migration preserves the original CA and existing trust. It does not run trust or untrust.
 For a fresh installation, request `sandbar trust` separately, then follow the [macOS browser steps](browser-trust.md#macos-manual-trust-and-removal).
 Stopping or removing the executable does not remove certificates, routes, or trust.
-There is no automatic macOS uninstaller. Preserve unrelated configuration and CA material during manual restoration.
+The checkout provides explicit [installed removal](#uninstall-installed-sandbar). Beta.3 does not include that command.
 
 Real service, browser trust, exact-root removal, and new-login checks remain pending until verified separately.
 See the [installation checklist](development.md#macos-installation-acceptance) and [macOS setup recovery](#macos-setup-recovery).
@@ -232,7 +232,7 @@ rm -- "$old_root"
 Deleting this duplicate does not remove trust and requires no certificate import or trust removal.
 Keep Caddy's original root, private keys, storage permissions, unrelated CAs, and historical setup backups unchanged.
 The original remains available for status checks and untrust while Caddy is stopped.
-Sandbar does not perform this cleanup automatically.
+Setup does not remove this copy. Confirmed uninstall removes it only after verifying its identity and completing untrust.
 
 ## Connect the standard Caddy service
 
@@ -330,17 +330,108 @@ sudo gpasswd -d alice sandbar
 
 Replace `alice` with the account to revoke. End its existing sessions because running processes retain their groups.
 This does not remove browser trust or routes. Keep the shared policy while another authorized user needs it.
-An administrator can remove Sandbar-owned Polkit and sudo policy files after the final user's access ends.
-The owned policy paths are `/etc/polkit-1/rules.d/50-sandbar.rules` and `/etc/sudoers.d/sandbar-caddy-validate`.
-After revoking all human users, an administrator can remove them:
-
-```sh
-sudo rm -- /etc/polkit-1/rules.d/50-sandbar.rules /etc/sudoers.d/sandbar-caddy-validate
-```
-
-Keep the service integration, `caddy` membership, and group while Caddy still serves Sandbar routes.
+Keep the service integration, policies, `caddy` membership, and group while Caddy still serves Sandbar routes.
+For full removal, leave these files intact for the uninstall ownership checks below.
+Uninstall checks the generated Polkit rule, sudo rule, and systemd drop-in before removing them.
+Additional human group members must have their access revoked before uninstall can proceed.
 Do not remove unrelated policies or Caddy configuration as part of access removal.
 See [browser trust removal](browser-trust.md#remove-trust) for the separate certificate step.
+
+## Uninstall installed Sandbar
+
+This command is available in the checkout. Published `v0.1.0-beta.3` does not include it.
+Build and install the checkout first if you need this command. Installing that executable alone removes no state.
+Uninstall retains the executable at its current path, including a custom `--bin-dir` destination.
+It removes the selected installed integration. It does not remove private `.sandbox` routers or separate legacy homes.
+Do not pass `--home` or set `SANDBAR_HOME` for uninstall.
+
+Preview first as the normal user. macOS uses:
+
+```sh
+sandbar uninstall --check
+```
+
+Linux uses the installed executable without an outer sudo command:
+
+```sh
+"$HOME/.local/bin/sandbar" uninstall --check
+```
+
+Use your actual executable path if you installed elsewhere.
+Preview reports the selected service, owned Teleport connections, public root fingerprint, cleanup paths, retained CLI, and conflicts.
+It changes no installed files, services, connections, or trust stores.
+Linux can request ordinary sudo authorization to inspect protected files, including during preview.
+Declining that request leaves the installation unchanged. Sandbar does not widen its passwordless permissions.
+
+Uninstall requires a dedicated selected Caddy service.
+If unrelated sites or listeners remain after stripping Sandbar's marked imports, it refuses before any mutation.
+Move those sites to a separate service first, then preview again.
+Changed markers, service identity conflicts, unknown files, symlinks, or uncertain group ownership also require manual review.
+Uninstall preserves those resources instead of guessing ownership or transferring the service automatically.
+Invalid source configuration or unresolved route recovery must be corrected first.
+Independent `stop` and `untrust` commands remain available when source or recovery blocks uninstall.
+
+After reviewing the preview, confirm removal as your normal user on macOS:
+
+```sh
+sandbar uninstall --yes
+```
+
+On Linux:
+
+```sh
+"$HOME/.local/bin/sandbar" uninstall --yes
+```
+
+Bare `uninstall` does not apply changes. `--check` and `--yes` cannot be combined or followed by extra arguments.
+Confirmation disconnects owned current-user Teleport connections and requests exact-root untrust through Caddy in the caller's environment.
+Linux then requests normal sudo authorization for fixed system cleanup. Do not run the whole command as root.
+macOS unloads its current-user LaunchAgent and checks that its sockets have closed.
+Both platforms stop the selected service before deleting runtime files and certificates.
+
+| Resource | Successful cleanup |
+| --- | --- |
+| Saved configuration | Remove routes, machine identity, Teleport registrations, generated files, and owned SSH files. |
+| Runtime and backups | Remove owned runtime state, setup metadata, and setup backups, including embedded CA copies. |
+| macOS integration | Remove owned files under `~/Library/Application Support/sandbar` and `~/Library/LaunchAgents/local.sandbar.caddy.plist`. |
+| Linux integration | Remove owned `/etc/sandbar` and `/var/lib/sandbar` files, verified access policies, and the systemd drop-in. |
+| Linux service and grants | Stop and disable `caddy.service`, reload systemd, and remove verified dedicated `sandbar` group grants. |
+| Shared Caddyfile | Remove only verified Sandbar marker blocks. Keep the file and all bytes outside those blocks. |
+| Caddy certificates | Remove only `pki/authorities/sandbar` and `certificates/sandbar` under the selected storage, plus matching owned public copies. |
+| CLI and unrelated data | Keep the CLI, Caddy package, packaged unit, Caddy account, other authorities, shared storage, and shared logs. |
+
+On Linux the generated policies are `/etc/polkit-1/rules.d/50-sandbar.rules` and `/etc/sudoers.d/sandbar-caddy-validate`.
+The owned drop-in is `/etc/systemd/system/caddy.service.d/sandbar.conf`.
+Unknown files stay intact. Owned directories are removed only when empty.
+Caddy storage is never removed as a whole. Backends, personal SSH configuration, keys, agents, and remote machines remain unchanged.
+The command does not restore Caddy's stock welcome site or start Homebrew Caddy.
+
+### Incomplete removal
+
+Refused or incomplete cleanup returns nonzero and reports completed actions, the failure, and retained paths.
+If untrust fails, configuration, all CA material, public copies, and setup backups remain available.
+Some trust stores might already have changed. Connections already disconnected remain disconnected.
+Shutdown failure preserves configuration, CA material, and backups needed for recovery.
+Later elevation or file failures preserve remaining files and report manual steps.
+Sandbar does not reconnect, reinstall trust, restart services, or restore deleted files automatically.
+
+Keep the reported paths and diagnostics while resolving the conflict. Do not delete whole directories to bypass ownership checks.
+Use [router recovery](reference.md#router-state-and-recovery) for pending route changes and the platform setup recovery sections for existing backup records.
+A partial uninstall has no new recovery journal. Review the actual remaining files before retrying or choosing manual recovery.
+A repeat after complete cleanup succeeds without creating new files.
+
+Caddy untrust success does not prove that manual browser imports or other users' trust stores were cleared.
+Record the exact root fingerprint and stores before confirming removal.
+Complete manual removal that needs the public certificate before uninstall deletes it. See [trust and uninstall](browser-trust.md#trust-and-uninstall).
+After shutdown, a failed connection cannot prove trust removal.
+
+### Fresh setup after removal
+
+The retained CLI still provides help and setup. Successful cleanup does not retain saved routes, machine identity, registrations, or the selected CA.
+Use the platform setup commands above for a fresh installation, then restore app names and explicitly request `sandbar trust`.
+Fresh setup creates a new CA and saves an initial machine identity. Choosing the same name does not restore the old CA.
+Re-register this machine's outgoing Teleport destinations explicitly.
+Peers registered against the removed machine identity or CA need deliberate registration updates. See [Teleport removal](teleport.md#uninstall-and-fresh-setup).
 
 ## Supported Caddy configurations
 

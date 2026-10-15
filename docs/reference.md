@@ -285,6 +285,20 @@ Other commands do not take Sandbar's lock. Sandbar detects observable conflicts 
 Changed external inputs require review and explicit setup reconciliation before another route change.
 For one-time setup or migration failures, use the separate [manual recovery guide](install.md#setup-and-migration-recovery).
 
+## Installed removal
+
+The checkout provides `sandbar uninstall --check` for read-only preview and `sandbar uninstall --yes` for confirmed cleanup.
+Published beta.3 does not include uninstall. Run the command as your normal user without `--home` or `SANDBAR_HOME`.
+Linux requests ordinary administrator authorization for protected inspection and system cleanup. Trust and SSH actions retain the caller's environment.
+The command keeps the CLI and refuses before mutation when the selected Caddy serves unrelated sites.
+It removes saved routes, identity, registrations, owned runtime files, integration, backups, and the selected CA after successful untrust and shutdown.
+It preserves unrelated files, packages, authorities, backends, remote machines, and private development homes.
+
+Partial cleanup returns nonzero with completed actions, failures, and retained paths. No service, trust, or connection is restored automatically.
+`stop` and `untrust` remain separate operations. Successful untrust alone does not establish removal of manual browser imports.
+Fresh setup creates a new installation and CA. Peers need deliberate registration updates.
+Read [installed removal and recovery](install.md#uninstall-installed-sandbar) before confirming cleanup.
+
 ## Teleport destinations
 
 Setup and development initialization enable machine-qualified URLs automatically.

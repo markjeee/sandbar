@@ -33,6 +33,9 @@ func run(args []string, out, errOut io.Writer) int {
 }
 
 func execute(args []string, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "_uninstall-system" {
+		return uninstallSystem(args[1:], out, errOut)
+	}
 	if len(args) > 0 && args[0] == "_launchd-caddy" {
 		return launchdCaddyBridge(args[1:], errOut)
 	}
@@ -59,7 +62,7 @@ func execute(args []string, out, errOut io.Writer) error {
 		return nil
 	}
 	command, rest := flags.Arg(0), flags.Args()[1:]
-	if command != "init" && command != "start" && command != "stop" && command != "trust" && command != "untrust" && command != "add" && command != "rm" && command != "ls" && command != "reload" && command != "status" && command != "setup" && command != "teleport" && command != "config" && command != "doctor" {
+	if command != "init" && command != "start" && command != "stop" && command != "trust" && command != "untrust" && command != "add" && command != "rm" && command != "ls" && command != "reload" && command != "status" && command != "setup" && command != "teleport" && command != "config" && command != "doctor" && command != "uninstall" {
 		return fmt.Errorf("unknown command %q (use --help)", command)
 	}
 	if command == "teleport" && commandHelpRequested(rest) {
@@ -88,6 +91,12 @@ func execute(args []string, out, errOut io.Writer) error {
 			return errors.New("doctor accepts no arguments")
 		}
 		return doctor(*home, out, errOut)
+	}
+	if command == "uninstall" {
+		if homeFlag || *home != "" {
+			return errors.New("uninstall does not accept --home or SANDBAR_HOME")
+		}
+		return uninstall(rest, out, errOut)
 	}
 	if command == "setup" {
 		if homeFlag || *home != "" {

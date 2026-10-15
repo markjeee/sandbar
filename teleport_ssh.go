@@ -100,18 +100,35 @@ func prepareTeleportSSH(p paths, destinations []teleportDestination) (string, er
 	if err = f.Close(); err != nil {
 		return "", err
 	}
+	content, err := renderTeleportSSH(dir, destinations)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "config")
+	if err := checkPrivateSSHFile(path); err != nil {
+		return "", err
+	}
+	if err := atomicWriteMode(path, content, 0600, -1, -1); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// Render without preparing files, so inspection can verify the owned configuration.
+func renderTeleportSSH(dir string, destinations []teleportDestination) ([]byte, error) {
+	known := filepath.Join(dir, "known_hosts")
 	var b strings.Builder
 	b.WriteString("Host *\n  IdentityAgent SSH_AUTH_SOCK\n  IdentityFile none\n  IdentitiesOnly no\n  PreferredAuthentications publickey\n  PubkeyAuthentication yes\n  PasswordAuthentication no\n  KbdInteractiveAuthentication no\n  ForwardAgent no\n  AddKeysToAgent no\n  ControlMaster no\n  ControlPath none\n  StrictHostKeyChecking ask\n  GlobalKnownHostsFile /dev/null\n  UserKnownHostsFile " + sshConfigPath(known) + "\n  ServerAliveInterval 15\n  ServerAliveCountMax 3\n  ExitOnForwardFailure yes\n  ConnectTimeout 15\n\n")
 	seen := map[string]bool{}
 	for _, d := range destinations {
 		if err := validateSSHEndpoint(d.Host); err != nil {
-			return "", err
+			return nil, err
 		}
 		if err := validateSSHEndpoint(d.User); err != nil {
-			return "", err
+			return nil, err
 		}
 		if d.Port < 1 || d.Port > 65535 {
-			return "", errors.New("SSH port must be from 1 through 65535")
+			return nil, errors.New("SSH port must be from 1 through 65535")
 		}
 		alias := teleportAlias(d)
 		if seen[alias] {
@@ -120,14 +137,7 @@ func prepareTeleportSSH(p paths, destinations []teleportDestination) (string, er
 		seen[alias] = true
 		fmt.Fprintf(&b, "Host %s\n  HostName %s\n  User %s\n  Port %d\n\n", alias, sshConfigPath(d.Host), sshConfigPath(d.User), d.Port)
 	}
-	path := filepath.Join(dir, "config")
-	if err := checkPrivateSSHFile(path); err != nil {
-		return "", err
-	}
-	if err := atomicWriteMode(path, []byte(b.String()), 0600, -1, -1); err != nil {
-		return "", err
-	}
-	return path, nil
+	return []byte(b.String()), nil
 }
 
 func runTeleportSSH(out, errOut io.Writer, args ...string) error {

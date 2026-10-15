@@ -10,7 +10,7 @@ fail() { printf 'Service acceptance failed: %s\n' "$*" >&2; exit 1; }
 . /etc/os-release
 [ "$ID:$VERSION_ID:$(uname -m)" = ubuntu:24.04:x86_64 ] || fail 'requires Ubuntu 24.04 amd64'
 [ -d /run/systemd/system ] || fail 'requires running systemd'
-[ "$#" = 1 ] || [ "$#" = 2 ] || fail 'usage: scripts/check-service /absolute/sandbar [--after-reboot]'
+[ "$#" = 1 ] || [ "$#" = 2 ] || fail 'usage: scripts/check-service /absolute/sandbar [--after-reboot|--uninstall]'
 case "$1" in /*) binary=$1 ;; *) fail 'Sandbar executable path must be absolute' ;; esac
 [ -x "$binary" ] || fail 'Sandbar executable is not executable'
 state=/var/tmp/sandbar-service-acceptance
@@ -33,6 +33,77 @@ probe() {
     curl --silent --show-error --fail --noproxy '*' --retry 5 --retry-delay 1 --retry-all-errors \
       --resolve "$1:443:127.0.0.1" --cacert /var/lib/sandbar/root.crt "https://$1/"
 }
+
+# Run this only after the ordinary service checks in the same disposable VM.
+if [ "$#" = 2 ] && [ "$2" = --uninstall ]; then
+    [ -f "$state/root-before.txt" ] || fail 'run the ordinary fixture before uninstall acceptance'
+    [ ! -e /etc/sudoers.d/sandbar-acceptance-admin ] || fail 'fixture administrator rule already exists'
+    # This disposable-account grant simulates normal administrator approval.
+    # It is separate from Sandbar's installed validation policy and always removed.
+    printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$member" > /etc/sudoers.d/sandbar-acceptance-admin
+    chmod 0440 /etc/sudoers.d/sandbar-acceptance-admin
+    trap 'rm -f /etc/sudoers.d/sandbar-acceptance-admin' EXIT HUP INT TERM
+    visudo --check --file /etc/sudoers.d/sandbar-acceptance-admin
+    sha256sum "$binary" /usr/bin/caddy > "$state/uninstall-binaries-before.txt"
+    sha256sum /etc/caddy/Caddyfile /var/lib/sandbar/root.crt > "$state/uninstall-inputs-before.txt"
+    expect_denied as_member uninstall --yes
+    rg -q 'unrelated.*configuration|unrelated.*listener|separate unrelated sites' "$state/denied.log" || fail 'shared service did not block uninstall'
+    sha256sum /etc/caddy/Caddyfile /var/lib/sandbar/root.crt > "$state/uninstall-inputs-refused.txt"
+    cmp "$state/uninstall-inputs-before.txt" "$state/uninstall-inputs-refused.txt" || fail 'shared-service refusal changed inputs'
+    probe sandbar.localhost > "$state/uninstall-welcome-refused.html"
+    curl --silent --show-error --fail --noproxy '*' http://127.0.0.1:19090/ | rg -q unrelated-site || fail 'refusal stopped unrelated site'
+
+    # Manually separate only this fixture's shared site, then remove the extra grant.
+    python3 - <<'PYTHON'
+from pathlib import Path
+path = Path('/etc/caddy/Caddyfile')
+data = path.read_bytes()
+site = b'\nhttp://127.0.0.1:19090 {\n    respond "unrelated-site"\n}\n'
+if data.count(site) != 1:
+    raise SystemExit('fixture shared site changed, refusing automatic separation')
+path.write_bytes(data.replace(site, b'', 1))
+PYTHON
+    systemctl reload caddy.service
+    expect_denied as_member uninstall --check
+    rg -q 'unowned.*file' "$state/denied.log" || fail 'another writer ownership did not block uninstall'
+    [ "$(stat -c %U /etc/sandbar/config.json)" = "$second_member" ] || fail 'refusal changed another writer ownership'
+    # Explicit setup reconciles the known integration files without replacing its CA.
+    "$binary" setup --user "$member" > "$state/uninstall-reconcile-setup.log" 2>&1
+    root_fingerprint > "$state/uninstall-root-reconciled.txt"
+    cmp "$state/root-before.txt" "$state/uninstall-root-reconciled.txt" || fail 'ownership reconciliation replaced CA'
+    expect_denied as_member uninstall --check
+    rg -q 'another or ambiguous member' "$state/denied.log" || fail 'extra member did not block uninstall'
+    gpasswd -d "$second_member" sandbar
+    mkdir -p /var/lib/caddy/.local/share/caddy/pki/authorities/uninstall-other
+    printf 'unrelated authority\n' > /var/lib/caddy/.local/share/caddy/pki/authorities/uninstall-other/keep
+    as_member uninstall --check > "$state/uninstall-preview.log" 2>&1
+    systemctl is-active --quiet caddy.service || fail 'uninstall preview changed service state'
+    [ -f /var/lib/sandbar/root.crt ] || fail 'uninstall preview removed CA evidence'
+    as_member trust > "$state/uninstall-trust.log" 2>&1
+    as_member uninstall --yes > "$state/uninstall.log" 2>&1
+    systemctl is-active --quiet caddy.service && fail 'uninstall left Caddy running'
+    [ "$(systemctl is-enabled caddy.service)" = disabled ] || fail 'uninstall did not disable Caddy boot startup'
+    for path in /etc/sandbar /var/lib/sandbar /etc/caddy/sandbar-global.Caddyfile \
+      /etc/polkit-1/rules.d/50-sandbar.rules /etc/sudoers.d/sandbar-caddy-validate \
+      /etc/systemd/system/caddy.service.d/sandbar.conf \
+      /var/lib/caddy/.local/share/caddy/pki/authorities/sandbar \
+      /var/lib/caddy/.local/share/caddy/certificates/sandbar; do
+        [ ! -e "$path" ] || fail "uninstall retained owned path: $path"
+    done
+    if find /var/backups -maxdepth 1 -name 'sandbar-setup-*' | rg -q .; then fail 'uninstall retained setup backups'; fi
+    if getent group sandbar > /dev/null; then fail 'uninstall retained the dedicated group'; fi
+    [ -f /etc/caddy/Caddyfile ] || fail 'uninstall removed shared Caddyfile'
+    [ -f /var/lib/caddy/.local/share/caddy/pki/authorities/uninstall-other/keep ] || fail 'uninstall removed unrelated authority'
+    systemctl is-active --quiet sandbar-acceptance-other.service || fail 'uninstall stopped unrelated service'
+    getent passwd caddy > /dev/null || fail 'uninstall removed package account'
+    sha256sum "$binary" /usr/bin/caddy > "$state/uninstall-binaries-after.txt"
+    cmp "$state/uninstall-binaries-before.txt" "$state/uninstall-binaries-after.txt" || fail 'uninstall changed retained executables'
+    as_member uninstall --yes > "$state/uninstall-repeat.log" 2>&1
+    [ ! -e /var/lib/sandbar ] || fail 'repeat recreated state'
+    as_member --help > "$state/uninstall-help.txt"
+    printf '%s\n' 'Uninstall service acceptance passed. Fresh-browser rejection needs a separate check.'
+    exit
+fi
 
 if [ "$#" = 2 ]; then
     [ "$2" = --after-reboot ] || fail 'unknown mode'

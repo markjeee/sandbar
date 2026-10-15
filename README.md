@@ -66,6 +66,7 @@ Apps must accept their machine URLs. Review allowed hosts, CSRF, redirects, cook
 | `sandbar reload` | Check and apply manual app-list edits. |
 | `sandbar start` / `sandbar stop` | Start Caddy / stop every Caddy route. |
 | `sandbar untrust` | Request certificate trust removal. |
+| `sandbar uninstall --check` / `sandbar uninstall --yes` | Preview / confirm installed cleanup, keeping the CLI. Checkout only, absent from beta.3. [Removal guide](docs/install.md#uninstall-installed-sandbar). |
 | `sandbar <command> --help` | Show options and examples. |
 
 Linux stop keeps boot startup enabled. macOS stop unregisters login startup. Start registers it again. See the [user reference](docs/reference.md) for paths, logs, status, and recovery.
@@ -96,5 +97,4 @@ Browsers use the local Sandbar CA. The remote CA verifies only that destination'
 
 See the [development guide](docs/development.md) for native builds, the isolated `.sandbox` router, and checks.
 Automated checks use temporary state. Installed service, Chrome trust, trust removal, and new-login checks need separate acceptance.
-Submit a [pull request](https://github.com/markjeee/sandbar/pulls) with relevant tests and development check results.
-Sandbar uses the [MIT license](LICENSE).
+Submit a [pull request](https://github.com/markjeee/sandbar/pulls) with relevant tests and development check results. Sandbar uses the [MIT license](LICENSE).

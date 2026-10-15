@@ -104,5 +104,11 @@ func withLock(p paths, action func() error) error {
 		return fmt.Errorf("lock router: %w", err)
 	}
 	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	// A waiting command must not enter an installation retired by uninstall.
+	if p.installed != nil {
+		if err := p.requireSetup(); err != nil {
+			return err
+		}
+	}
 	return action()
 }

@@ -104,7 +104,7 @@ The browser trusts the connecting machine's local Sandbar CA.
 Registration obtains the destination public CA through verified SSH and stores it only in that destination's proxy transport.
 It does not import the remote CA into browser or system trust stores or request another CA approval.
 Both certificate-chain and hostname verification remain enabled.
-Only explicit `trust` and `untrust` commands change local trust stores.
+Explicit `trust`, `untrust`, and confirmed installed `uninstall` can change local trust stores.
 
 Caddy issues local internal certificates for registered destination names, including nested app labels.
 It does not issue them for unrelated names.
@@ -118,3 +118,30 @@ Unknown connection state includes its reason and alone does not fail either comm
 Both commands leave connections unchanged. Observations can become stale.
 Use `sandbar teleport connect <machine>` to connect explicitly, retaining any selected `--home`.
 Remote app failures still need remote service and app checks. See [diagnostic result meanings](reference.md#read-doctor-results).
+
+## Uninstall and fresh setup
+
+The checkout's `sandbar uninstall --check` previews removal of the local installed integration. Beta.3 does not include uninstall.
+`sandbar uninstall --yes` disconnects owned current-user connections before removing local registrations, proxy trust, dedicated SSH files, logs, and control sockets.
+Absent connections need no SSH agent. Foreign ownership or unknown connection state blocks cleanup before mutation.
+Untrust failure preserves local configuration and CA material, but connections already disconnected remain disconnected.
+Later failures report completed actions and retained paths. Sandbar does not reconnect automatically.
+See [installed removal](install.md#uninstall-installed-sandbar) for confirmation, ownership checks, and recovery.
+
+Uninstall does not change remote Caddy, apps, remote registrations, personal SSH files, private keys, or the existing agent.
+Peers that registered this machine keep their local registration. Their tunnel no longer reaches the removed service.
+Fresh setup does not update registrations saved on peers or restore outgoing registrations removed from this machine.
+
+After fresh setup, restore local apps and explicitly request local trust for the new CA.
+Register outgoing destinations again with `sandbar teleport register <machine>`.
+On each peer with the old identity or CA, deliberately remove the old registration and register the prepared machine again:
+
+```sh
+sandbar teleport rm <old-machine>
+sandbar teleport register <ssh-host>
+```
+
+Replace both placeholders with the saved destination name and the prepared machine's SSH host.
+Reapply any original registration options, including `--remote-bin`, before the SSH host.
+A reused machine name still has a new CA after successful uninstall and fresh setup.
+Connect rejects that changed CA rather than replacing saved proxy trust automatically.

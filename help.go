@@ -23,6 +23,7 @@ Commands:
   stop      Stop Caddy and all its routes
   trust     Trust Sandbar's HTTPS certificates
   untrust   Remove trust for Sandbar's certificate
+  uninstall Remove the installed integration and keep the CLI
 
 Example: sandbar add app.sandbar.localhost 8000
 
@@ -59,6 +60,28 @@ func helpText(command string) (string, bool) {
 }
 
 var commandHelp = map[string]string{
+	"uninstall": `Remove the installed Sandbar integration and keep this executable.
+
+Usage: sandbar uninstall (--check | --yes)
+
+Options:
+  --check   Preview removal without changing installed state
+  --yes     Confirm removal of routes, identity, Teleport registrations, and CA
+
+Example: sandbar uninstall --check
+Remove: sandbar uninstall --yes
+
+Run as your normal user. Do not select --home or SANDBAR_HOME.
+Linux requests ordinary administrator authorization for protected inspection and cleanup.
+macOS unloads the current user's Sandbar LaunchAgent and releases its sockets.
+Unrelated sites in the selected Caddy service must be separated before removal.
+Caddy, this CLI, unrelated files, backends, SSH keys, and remote machines remain.
+Owned connections close first. Untrust failure preserves CA files, configuration, and backups.
+Caddy untrust success does not prove removal of manual browser imports.
+Failures report completed actions and retained paths. No automatic recovery runs.
+Fresh setup creates new identity and CA material. Trust and peer registrations need updates.
+See docs/install.md and docs/browser-trust.md for cleanup and recovery boundaries.
+`,
 	"teleport": teleportCommandHelp,
 	"config": `Show the selected source path or its exact contents without changing state.
 

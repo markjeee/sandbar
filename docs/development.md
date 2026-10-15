@@ -370,7 +370,7 @@ Use ordinary setup backups and reported diagnostics for recovery. Preserve unrel
 `scripts/check-service` changes service configuration, access rules, and test accounts.
 Run it only in a fresh disposable Ubuntu 24.04 amd64 VM with actual systemd and packaged Caddy.
 It is separate from `scripts/check --integration` and the private browser proof.
-Never use a personal machine or real trust stores for this fixture.
+Never target a personal machine, a live developer installation, or personal trust stores with this fixture.
 Install apt Caddy v2.11.7 or later, sudo, Polkit, ripgrep, iproute2, curl, OpenSSL, and Python 3 first.
 
 Build the checkout executable, then make it readable and executable by the fixture users.
@@ -396,6 +396,22 @@ That mode requires a changed boot ID and checks the retained root, welcome page,
 Enablement alone does not establish reboot acceptance.
 Migration, rollback, development isolation, and fresh-browser trust still need their separate acceptance checks.
 CI runs the initial service fixture in a separate Ubuntu job. It does not claim reboot or browser acceptance.
+
+After the ordinary fixture, run uninstall acceptance only in that same marked disposable VM.
+If you want reboot acceptance, complete `--after-reboot` first. Uninstall stops and disables Caddy and removes the fixture installation.
+Recreate the `/run` marker after a reboot. Keep the required environment guard:
+
+```sh
+sudo env SANDBAR_SERVICE_ACCEPTANCE=disposable-ubuntu-24.04 \
+  scripts/check-service /usr/local/bin/sandbar-service-check --uninstall
+```
+
+This mode checks shared-site refusal before separating only the fixture's unrelated site.
+It checks ownership and group-member refusal, read-only preview, confirmed cleanup, retained executables and unrelated resources, and repeat removal.
+It trusts and untrusts the fixture root inside the disposable VM. This is not browser acceptance.
+A temporary fixture-only administrator sudo rule models normal approval for the test account and is removed when the script exits.
+That rule is separate from Sandbar's installed validation policy. Do not copy it into an installed developer environment.
+Uninstall evidence stays in `/var/tmp/sandbar-service-acceptance`. Discard the VM after inspection.
 
 `scripts/check-migration` is a separate fixture for a fresh disposable VM with the same guard and prerequisites.
 It also needs `libcap2-bin` and a working systemd user manager.

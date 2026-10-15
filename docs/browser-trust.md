@@ -180,6 +180,26 @@ After removal, start the selected router and backend again, then use a fresh Chr
 A connection failure while Caddy is stopped does not prove that trust was removed.
 Successful `untrust` alone does not prove that Chrome or every other store stopped trusting the root.
 
+## Trust and uninstall
+
+The checkout's `sandbar uninstall --check` previews installed cleanup without changing trust.
+Published beta.3 does not provide uninstall. See [installed removal](install.md#uninstall-installed-sandbar) for confirmation and platform permissions.
+`sandbar uninstall --yes` disconnects owned Teleport connections, then delegates exact-root untrust in your current trust environment.
+Run it as your normal user. Linux sudo authorization covers protected inspection and system cleanup, not a switch to root's trust stores.
+
+Record the printed SHA-256 root fingerprint and every store used for manual imports before confirming removal.
+If manual removal needs the public certificate file, complete that step before uninstall deletes the authority and matching public copies.
+Successful Caddy untrust does not prove that manual Chrome, keychain, Firefox, Java, or other users' imports were removed.
+Review those stores by the recorded fingerprint. Do not select a certificate by display name alone.
+
+If Caddy untrust fails, uninstall stops and preserves configuration, certificates, private keys, public copies, and setup backups.
+Some stores might already have changed. Previously disconnected connections remain disconnected, and Sandbar does not reinstall trust automatically.
+Resolve the reported failure using the retained root and Caddy diagnostics before retrying.
+If a later cleanup step fails, read the reported completed actions and retained paths before manual recovery.
+
+A successful uninstall stops Caddy and removes its selected CA. Connection failure afterward cannot establish browser trust removal.
+Fresh setup creates a new CA. Explicitly request trust for that new root and update peer registrations as described in [Teleport](teleport.md#uninstall-and-fresh-setup).
+
 ## Diagnose incomplete setup
 
 A nonzero Caddy result remains a failure. Some stores might already have changed before that failure.
