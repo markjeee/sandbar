@@ -171,6 +171,17 @@ Beta.4 provides explicit [installed removal](#uninstall-installed-sandbar).
 Native checks and package verification do not establish browser trust, exact-root removal, or actual startup after logout/login.
 See the [installation checklist](development.md#macos-installation-acceptance) and [macOS setup recovery](#macos-setup-recovery).
 
+## Pending route recovery blocks setup
+
+Linux and macOS setup refuse an existing route transaction, including during `setup --check`.
+The error identifies its transaction path and asks you to resolve pending route recovery before setup.
+Setup preserves that journal, configuration, runtime files, and service state.
+An unreadable or malformed transaction entry also blocks setup.
+
+Run `sandbar status`, then follow [router recovery](reference.md#router-state-and-recovery) before repeating setup.
+Setup does not run route recovery or decide which saved transaction should win.
+Do not delete the transaction merely to bypass the refusal.
+
 ## macOS setup recovery
 
 Ordinary setup rollback removes the new job before restoring the previous configuration and service state.

@@ -83,6 +83,9 @@ func setup(args []string, out, errOut io.Writer) error {
 		}
 	}
 	p := installedPaths(i)
+	if err := checkSetupRecovery(p); err != nil {
+		return err
+	}
 	if err := checkSelectedCaddy(p, caddyEnv(p), errOut); err != nil {
 		return err
 	}
@@ -226,6 +229,9 @@ func serviceDropIn(address string) []byte {
 }
 
 func applySetup(p paths, options setupOptions, account *user.User, source, routes, globals []byte, composition installedComposition, expected []setupSnapshot, prior serviceState, migration *legacyMigration, out, errOut io.Writer) (result error) {
+	if err := checkSetupRecovery(p); err != nil {
+		return err
+	}
 	i := p.installed
 	backupDir, err := os.MkdirTemp("/var/backups", "sandbar-setup-")
 	if err != nil {
@@ -352,6 +358,9 @@ func applySetup(p paths, options setupOptions, account *user.User, source, route
 		return err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if err := checkSetupRecovery(p); err != nil {
+		return err
+	}
 	if err := checkSetupSnapshots(expected); err != nil {
 		return err
 	}

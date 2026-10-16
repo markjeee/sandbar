@@ -58,6 +58,9 @@ func setup(args []string, out, errOut io.Writer) error {
 
 // The route verifier is replaced only by setup tests whose service commands are simulated.
 func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify func(paths, config) error) error {
+	if err := checkSetupRecovery(p); err != nil {
+		return err
+	}
 	i := p.installed
 	priorService := i.Service
 	if i.ID == sandbarLaunchdID {
@@ -200,6 +203,9 @@ func setupDarwin(p paths, options setupOptions, out, errOut io.Writer, verify fu
 }
 
 func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, composition installedComposition, expected []setupSnapshot, prior serviceState, priorService serviceOperations, plan socketPlan, out, errOut io.Writer, verify func(paths, config) error) (result error) {
+	if err := checkSetupRecovery(p); err != nil {
+		return err
+	}
 	i := p.installed
 	if err := checkSetupSnapshots(expected); err != nil {
 		return err
@@ -282,6 +288,9 @@ func applyDarwinSetup(p paths, cfg config, source, routes, globals []byte, compo
 		return err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if err := checkSetupRecovery(p); err != nil {
+		return err
+	}
 	if err := checkSetupSnapshots(expected); err != nil {
 		return err
 	}

@@ -38,11 +38,12 @@ func readSetupRecord(p paths) (setupRecord, error) {
 }
 
 type setupBackup struct {
-	Path      string      `json:"path"`
-	Data      []byte      `json:"data"`
-	Mode      os.FileMode `json:"mode"`
-	UID, GID  int
-	Published []byte `json:"published"`
+	Path              string      `json:"path"`
+	Data              []byte      `json:"data"`
+	Mode              os.FileMode `json:"mode"`
+	UID, GID          int
+	Published         []byte        `json:"published"`
+	PublishedMetadata *fileMetadata `json:"published_metadata,omitempty"`
 }
 type setupUndo struct {
 	Files             []setupBackup
@@ -73,40 +74,65 @@ func (u *setupUndo) write(path string, data []byte, mode os.FileMode, uid, gid i
 	var entry setupBackup
 	entry.Path = path
 	entry.Published = data
-	info, err := os.Lstat(path)
-	if err == nil {
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("setup refuses non-regular file: %s", path)
-		}
-		entry.Data, err = os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		entry.Mode = info.Mode() & (os.ModePerm | os.ModeSetgid | os.ModeSetuid | os.ModeSticky)
-		stat := info.Sys().(*syscall.Stat_t)
-		entry.UID, entry.GID = int(stat.Uid), int(stat.Gid)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	dataBefore, metadata, err := readSetupFile(path)
+	if err != nil {
 		return err
+	}
+	entry.Data = dataBefore
+	if metadata != nil {
+		entry.Mode, entry.UID, entry.GID = metadata.Mode, metadata.UID, metadata.GID
 	}
 	u.Files = append(u.Files, entry)
 	if err := u.save(); err != nil {
 		return err
 	}
-	return atomicWriteMode(path, data, mode, uid, gid)
+	if err := atomicWriteMode(path, data, mode, uid, gid); err != nil {
+		return err
+	}
+	_, metadata, err = readSetupFile(path)
+	if err != nil {
+		return err
+	}
+	u.Files[len(u.Files)-1].PublishedMetadata = metadata
+	return u.save()
 }
+
+func readSetupFile(path string) ([]byte, *fileMetadata, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("setup refuses non-regular file: %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	stat := info.Sys().(*syscall.Stat_t)
+	return data, &fileMetadata{Mode: fileAccessMode(info.Mode()), UID: int(stat.Uid), GID: int(stat.Gid)}, nil
+}
+
 func (u *setupUndo) restore() error {
 	var failures []error
 	for n := len(u.Files) - 1; n >= 0; n-- {
 		file := u.Files[n]
-		current, err := readOptional(file.Path)
+		current, metadata, err := readSetupFile(file.Path)
 		if err != nil {
 			failures = append(failures, err)
 			continue
 		}
-		if sameFileBytes(current, file.Data) {
+		originalMatches := metadata == nil && file.Data == nil
+		if metadata != nil && file.Data != nil {
+			originalMatches = *metadata == (fileMetadata{Mode: file.Mode, UID: file.UID, GID: file.GID})
+		}
+		if sameFileBytes(current, file.Data) && originalMatches {
 			continue
 		}
-		if !sameFileBytes(current, file.Published) {
+		if !sameFileBytes(current, file.Published) || metadata == nil || file.PublishedMetadata == nil || *metadata != *file.PublishedMetadata {
 			failures = append(failures, fmt.Errorf("external edit preserved at %s", file.Path))
 			continue
 		}
@@ -328,4 +354,14 @@ func initialCertificatePending(err error) bool {
 	var tlsErr *routeTLSError
 	var remote *net.OpError
 	return errors.As(err, &tlsErr) && errors.As(tlsErr, &remote) && remote.Op == "remote error" && remote.Err.Error() == "tls: internal error"
+}
+
+func checkSetupRecovery(p paths) error {
+	path := p.file("transaction")
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect pending route recovery at %s before setup: %w", path, err)
+	}
+	return fmt.Errorf("resolve pending route recovery at %s before setup; review sandbar status and existing recovery guidance", path)
 }

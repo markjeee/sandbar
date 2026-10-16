@@ -112,10 +112,6 @@ func atomicWriteMode(path string, data []byte, mode os.FileMode, uid, gid int) e
 		return err
 	}
 	defer os.Remove(file.Name())
-	if err := file.Chmod(mode); err != nil {
-		file.Close()
-		return err
-	}
 	if uid >= 0 || gid >= 0 {
 		if err := file.Chown(uid, gid); err != nil {
 			file.Close()
@@ -123,6 +119,10 @@ func atomicWriteMode(path string, data []byte, mode os.FileMode, uid, gid int) e
 		}
 	}
 	_, writeErr := file.Write(data)
+	if err := file.Chmod(mode); err != nil {
+		file.Close()
+		return err
+	}
 	if err := errors.Join(writeErr, file.Sync(), file.Close()); err != nil {
 		return err
 	}
