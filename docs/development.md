@@ -324,8 +324,8 @@ Native tests use temporary homes and high ports, then stop only the Caddy instan
 Trust-command tests use fake Caddy and preserve personal trust stores.
 Linux browser acceptance uses the separate [isolated browser proof](browser-proof.md).
 macOS browser acceptance follows explicit installation and trust requests below.
-See [release preparation](install.md#release-preparation) for beta.4 packaging and installer checks.
-Run `scripts/release` for authored beta.4 notes, or use `--version <candidate-version>` for unpublished candidate notes.
+See [release preparation](install.md#release-preparation) for beta.5 packaging and installer checks.
+Run `scripts/release` for authored beta.5 notes, or use `--version <candidate-version>` for unpublished candidate notes.
 Public releases use the same committed revision on both native platforms and one combined checksum manifest.
 Verify downloads with temporary `--bin-dir` destinations. Keep setup, trust, and installed service changes separate.
 

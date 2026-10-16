@@ -8,16 +8,16 @@ Sandbar gives local apps HTTPS names such as `https://app.sandbar.localhost`. Te
 Use Linux amd64 with apt Caddy and systemd, or macOS arm64 with Homebrew Caddy and Sandbar's user LaunchAgent. Install [Caddy](https://caddyserver.com/docs/install) v2.11.7 or a later v2 release separately.
 Linux also needs Polkit and sudo. Ubuntu 24.04 is its acceptance target.
 
-Install beta.4 on either platform with the versioned installer. macOS packages are unsigned and unnotarized:
+Install beta.5 on either platform with the versioned installer. macOS packages are unsigned and unnotarized:
 
 ```sh
-curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.4/install.sh | sh
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.5/install.sh | sh
 ```
 
 macOS installs a regular executable at `/usr/local/bin/sandbar`. Linux defaults to `~/.local/bin/sandbar`. Add that directory to `PATH`.
 
 Use `--bin-dir <directory>` for another destination. The installer requests macOS administrator access only for executable publication. It does not install Caddy, start services, change trust, or edit shell profiles.
-See [installation and upgrades](docs/install.md) for prerequisites, explicit setup, backups, and rollback. Beta.3 upgrades need only executable replacement.
+See [installation and upgrades](docs/install.md) for prerequisites, explicit setup, backups, and rollback. Beta.3 and beta.4 upgrades need only executable replacement.
 
 ## Set up Caddy
 

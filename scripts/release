@@ -3,13 +3,13 @@
 set -eu
 umask 077
 
-version='v0.1.0-beta.4'
+version='v0.1.0-beta.5'
 if [ "${1:-}" = --version ]; then
     [ "$#" -ge 2 ] && [ -n "$2" ] || { echo '--version requires a version' >&2; exit 1; }
     version=$2
     shift 2
     case "$version" in
-        v0.1.0-beta.1|v0.1.0-beta.2|v0.1.0-beta.3) echo 'Choose an unreleased candidate version, not an existing release.' >&2; exit 1 ;;
+        v0.1.0-beta.1|v0.1.0-beta.2|v0.1.0-beta.3|v0.1.0-beta.4) echo 'Choose an unreleased candidate version, not an existing release.' >&2; exit 1 ;;
     esac
 fi
 case "$version" in

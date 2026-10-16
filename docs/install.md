@@ -1,6 +1,6 @@
 # Install Sandbar
 
-Beta.4 targets Linux amd64 and macOS arm64. Beta.1 and beta.2 assets remain Linux-only.
+Beta.5 targets Linux amd64 and macOS arm64. Beta.1 and beta.2 assets remain Linux-only.
 Linux uses apt-packaged Caddy with systemd, Polkit, and sudo. Ubuntu 24.04 is its acceptance target.
 macOS uses native Homebrew Caddy and one Sandbar-managed current-user LaunchAgent.
 Install prerequisites separately. Sandbar packages need no Go runtime.
@@ -9,10 +9,10 @@ Automated native checks establish development readiness. Real macOS installation
 
 ## Release installation
 
-Install `v0.1.0-beta.4` on Linux amd64 or macOS arm64:
+Install `v0.1.0-beta.5` on Linux amd64 or macOS arm64:
 
 ```sh
-curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.4/install.sh | sh
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.5/install.sh | sh
 ```
 
 The versioned installer downloads the matching archive and checks its SHA-256 checksum before replacing `sandbar`.
@@ -21,7 +21,7 @@ The checksum comes from the same HTTPS release. It checks transfer integrity, no
 The destination defaults to `~/.local/bin` on Linux and `/usr/local/bin` on macOS. Select another directory with `--bin-dir`:
 
 ```sh
-curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.4/install.sh | sh -s -- --bin-dir "$HOME/bin"
+curl -fsSL https://github.com/markjeee/sandbar/releases/download/v0.1.0-beta.5/install.sh | sh -s -- --bin-dir "$HOME/bin"
 ```
 
 Make sure the selected directory is in `PATH`, or use the full executable path.
@@ -30,9 +30,9 @@ The installer does not edit shell profiles, install Caddy, start services, or ch
 macOS assets are unsigned and unnotarized. Local candidates do not establish public download availability.
 Actual launchd startup after logout/login remains deferred. Registration and start/stop checks do not establish that result.
 
-## Upgrade to beta.4
+## Upgrade to beta.5
 
-Installing beta.4 replaces only the executable. Existing beta.3 installations need no new setup or configuration migration.
+Installing beta.5 replaces only the executable. Existing beta.3 and beta.4 installations need no new setup or configuration migration.
 Executable replacement preserves version 3 source, routes, machine identity, Teleport registrations, services, and trust.
 Setup, trust changes, connection changes, and uninstall remain separate explicit actions.
 
@@ -166,7 +166,7 @@ The static welcome page needs no backend and remains after removing the final ap
 Service migration preserves the original CA and existing trust. It does not run trust or untrust.
 For a fresh installation, request `sandbar trust` separately, then follow the [macOS browser steps](browser-trust.md#macos-manual-trust-and-removal).
 Stopping or removing the executable does not remove certificates, routes, or trust.
-Beta.4 provides explicit [installed removal](#uninstall-installed-sandbar).
+Beta.5 provides explicit [installed removal](#uninstall-installed-sandbar).
 
 Native checks and package verification do not establish browser trust, exact-root removal, or actual startup after logout/login.
 See the [installation checklist](development.md#macos-installation-acceptance) and [macOS setup recovery](#macos-setup-recovery).
@@ -354,7 +354,7 @@ See [browser trust removal](browser-trust.md#remove-trust) for the separate cert
 
 ## Uninstall installed Sandbar
 
-Beta.4 provides this command. Installing the executable alone removes no state.
+Beta.5 provides this command. Installing the executable alone removes no state.
 Uninstall retains the executable at its current path, including a custom `--bin-dir` destination.
 It removes the selected installed integration. It does not remove private `.sandbox` routers or separate legacy homes.
 Do not pass `--home` or set `SANDBAR_HOME` for uninstall.
@@ -481,8 +481,8 @@ For everyday route recovery, follow the [user reference](reference.md#router-sta
 This legacy migration applies to Linux. macOS does not import legacy Linux state.
 
 Beta.1 uses a private router. Beta.2 and later use the standard Caddy service by default.
-Installing beta.4 does not migrate routes, stop the old router, or change trust.
-Back up the old executable and record its version before installing beta.4.
+Installing beta.5 does not migrate routes, stop the old router, or change trust.
+Back up the old executable and record its version before installing beta.5.
 Record the old configuration path, state directory, CA fingerprint, and command used to start its router.
 Keep the legacy configuration and signing files protected and available until migration is verified.
 Resolve any existing route transaction recovery with the legacy version before migration.
@@ -600,20 +600,20 @@ If the original state or restart command cannot be established, retain all evide
 
 ## Release preparation
 
-Prepare beta.4 with `scripts/release`, or prepare a distinct unreleased native candidate:
+Prepare beta.5 with `scripts/release`, or prepare a distinct unreleased native candidate:
 
 ```sh
-scripts/release --version v0.1.0-beta.4-candidate
-cd .sandbox/release/v0.1.0-beta.4-candidate
+scripts/release --version v0.1.0-beta.5-candidate
+cd .sandbox/release/v0.1.0-beta.5-candidate
 ```
 
 On macOS arm64, verify the package and system-only dynamic linkage with native tools:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-./sandbar_v0.1.0-beta.4-candidate_darwin_arm64 --version
-go version -m ./sandbar_v0.1.0-beta.4-candidate_darwin_arm64
-otool -L ./sandbar_v0.1.0-beta.4-candidate_darwin_arm64
+./sandbar_v0.1.0-beta.5-candidate_darwin_arm64 --version
+go version -m ./sandbar_v0.1.0-beta.5-candidate_darwin_arm64
+otool -L ./sandbar_v0.1.0-beta.5-candidate_darwin_arm64
 ```
 
 macOS build metadata must show `CGO_ENABLED=1`. Dynamic libraries must come from `/usr/lib` or `/System/Library`.
@@ -630,16 +630,16 @@ Run native packaging on the corresponding platform. Do not build or test Linux o
 - `SHA256SUMS`, covering the executable, archive, installer, and release notes.
 
 Default output is `.sandbox/release/<version>/`. An explicit directory overrides it.
-Without options, `scripts/release` prepares beta.4 on either native platform.
+Without options, `scripts/release` prepares beta.5 on either native platform.
 When `docs/releases/<version>.md` exists, packaging uses those authored notes.
 Other versions retain notes that identify an unpublished local candidate.
 Run `scripts/test-install` to test checkout builds and controlled release downloads into temporary destinations.
 These checks select platform defaults without writing to `/usr/local/bin`.
 A local candidate is unsigned development output, not a published or notarized macOS release.
-Keep existing beta.1, beta.2, and beta.3 tags and assets unchanged. Publish new versions separately under their own tags.
+Keep existing beta.1, beta.2, beta.3, and beta.4 tags and assets unchanged. Publish new versions separately under their own tags.
 Verify public downloads and installation only after publication.
 
-For public beta.4 preparation, build the same committed revision on each native platform.
+For public beta.5 preparation, build the same committed revision on each native platform.
 Compare the installer, notes, and license bytes from both archives.
 Assemble both executables and archives with one shared installer and notes, then generate one combined SHA-256 manifest.
 That manifest covers six files. Upload those six files and the manifest as one GitHub prerelease.

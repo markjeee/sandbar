@@ -102,5 +102,5 @@ printf '%s\n' 'Checking reachable Go vulnerabilities'
 
 printf 'Building the native %s/%s executable\n' "$target_os" "$target_arch"
 CGO_ENABLED="$cgo_enabled" go build -trimpath -o "$check_dir/sandbar" .
-scripts/release --version v0.1.0-beta.4-candidate
+scripts/release --version v0.1.0-beta.5-candidate
 printf 'Checks passed. Coverage: %s/coverage.out\n' "$check_dir"
