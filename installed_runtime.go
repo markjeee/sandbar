@@ -158,6 +158,30 @@ func startInstalled(p paths, out, errOut io.Writer) error {
 	if state.State != "inactive" && state.State != "failed" {
 		return fmt.Errorf("cannot start Caddy with service state %s", state.State)
 	}
+	if state.State == "failed" {
+		if _, err := readActiveConfig(p); !isRouterStopped(err) {
+			if err == nil {
+				return errors.New("cannot restart failed Caddy while its admin endpoint responds")
+			}
+			return fmt.Errorf("cannot inspect failed Caddy admin endpoint: %w", err)
+		}
+		if err := p.installed.Service.Control("stop", out, errOut); err != nil {
+			return fmt.Errorf("stop failed Caddy: %w", err)
+		}
+		state, err = p.installed.Service.Inspect()
+		if err != nil {
+			return fmt.Errorf("inspect Caddy after shutdown: %w", err)
+		}
+		if state.State != "inactive" {
+			return fmt.Errorf("cannot restart Caddy after shutdown with service state %s", state.State)
+		}
+		if _, err := readActiveConfig(p); !isRouterStopped(err) {
+			if err == nil {
+				return errors.New("cannot restart Caddy while its admin endpoint still responds after shutdown")
+			}
+			return fmt.Errorf("cannot inspect Caddy admin endpoint after shutdown: %w", err)
+		}
+	}
 	if err := changeRoutes(p, "start", nil, out, errOut); err != nil {
 		return err
 	}

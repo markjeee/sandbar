@@ -45,6 +45,10 @@ The `local.sandbar.caddy` job owns HTTP TCP and HTTPS TCP/UDP loopback sockets.
 Stop unloads this job and releases its sockets. Requests cannot restart it after a successful stop.
 Start uses the retained private template to restore the login copy. Reload retains the job and Caddy PID.
 
+On installed Linux and macOS, `sandbar start` restarts a failed owned service when its private admin endpoint is absent or refuses connections.
+Sandbar resolves pending route recovery first, then stops the failed service before applying saved routes and starting it.
+Unresolved recovery, ambiguous admin access, or failed shutdown blocks restart without replacing route files.
+
 ## Inspect and diagnose
 
 | Command | Purpose |
