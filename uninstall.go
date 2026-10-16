@@ -80,7 +80,7 @@ func buildUninstallPlan(p paths, ownerUID int, errOut io.Writer) (*uninstallPlan
 		if bytes.Contains(top, []byte("SANDBAR GLOBAL")) || bytes.Contains(top, []byte("SANDBAR ROUTES")) {
 			return nil, fmt.Errorf("the Sandbar markers remain in %s; retain partial state for manual recovery", i.Config)
 		}
-		controlDir := filepath.Join("/tmp", fmt.Sprintf("sandbar-%d-%s", ownerUID, teleportID(filepath.Dir(p.config))))
+		controlDir := teleportShortControlDir(p, ownerUID)
 		if _, err := os.Lstat(controlDir); err == nil {
 			return nil, fmt.Errorf("the Sandbar SSH control directory remains at %s; review it manually", controlDir)
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -243,33 +243,41 @@ func buildUninstallPlan(p paths, ownerUID int, errOut io.Writer) (*uninstallPlan
 			return nil, err
 		}
 	}
-	for _, d := range plan.Config.Teleports {
-		socket, _, err := teleportControlPathsForOwner(p, d, ownerUID)
-		if err != nil {
-			return nil, err
-		}
-		if !strings.HasPrefix(socket, p.state+string(os.PathSeparator)) {
-			if err := plan.addTree(filepath.Dir(socket), func(rel string, info os.FileInfo) bool {
-				if rel == "." {
-					return true
-				}
-				for _, dest := range plan.Config.Teleports {
-					s, _, _ := teleportControlPathsForOwner(p, dest, ownerUID)
-					if filepath.Base(s) == rel {
-						return info.Mode()&os.ModeSocket != 0
-					}
-				}
-				return false
-			}, ownerUID); err != nil {
-				return nil, err
-			}
-		}
+	if err := plan.addTeleportControlDirectory(); err != nil {
+		return nil, err
 	}
 	if err := uninstallPlatformPreflight(plan, ownerUID); err != nil {
 		return nil, err
 	}
 	sort.Slice(plan.Entries, func(a, b int) bool { return plan.Entries[a].Path < plan.Entries[b].Path })
 	return plan, nil
+}
+
+func (plan *uninstallPlan) addTeleportControlDirectory() error {
+	root := teleportShortControlDir(plan.Paths, plan.OwnerUID)
+	info, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || info.Mode().Perm() != 0700 || int(stat.Uid) != plan.OwnerUID {
+		return fmt.Errorf("SSH directory must be owned by user %d with mode 0700: %s", plan.OwnerUID, root)
+	}
+	return plan.addTree(root, func(rel string, info os.FileInfo) bool {
+		if rel == "." {
+			return true
+		}
+		for _, d := range plan.Config.Teleports {
+			socket, _, _ := teleportControlPathsForOwner(plan.Paths, d, plan.OwnerUID)
+			if socket == filepath.Join(root, rel) {
+				return info.Mode()&os.ModeSocket != 0
+			}
+		}
+		return false
+	}, plan.OwnerUID)
 }
 
 func stripUninstallMarkers(top []byte, globals, routes string) ([]byte, error) {
@@ -615,7 +623,7 @@ func teleportControlPathsForOwner(p paths, d teleportDestination, uid int) (stri
 		return "", "", err
 	}
 	if strings.HasPrefix(socket, "/tmp/sandbar-") {
-		socket = filepath.Join("/tmp", fmt.Sprintf("sandbar-%d-%s", uid, teleportID(filepath.Dir(p.config))), teleportID(d.Machine)+".sock")
+		socket = filepath.Join(teleportShortControlDir(p, uid), teleportID(d.Machine)+".sock")
 	}
 	return socket, log, nil
 }

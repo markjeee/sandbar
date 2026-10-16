@@ -257,6 +257,10 @@ func readTeleportPeer(configPath string, d teleportDestination, errOut io.Writer
 // https://github.com/openssh/openssh-portable/blob/V_10_3_P1/mux.c#L1236-L1266
 const sshControlSocketSuffixLength = 1 + 16
 
+func teleportShortControlDir(p paths, uid int) string {
+	return filepath.Join("/tmp", fmt.Sprintf("sandbar-%d-%s", uid, teleportID(filepath.Dir(p.config))))
+}
+
 // Control paths are also used by observers that must not prepare runtime files.
 func teleportControlPaths(p paths, d teleportDestination) (string, string, error) {
 	base := p.state
@@ -266,7 +270,7 @@ func teleportControlPaths(p paths, d teleportDestination) (string, string, error
 	dir := filepath.Join(base, "teleport", teleportID(d.Machine))
 	socket := filepath.Join(dir, "control.sock")
 	if len(socket)+sshControlSocketSuffixLength > socketPathLimit {
-		base := filepath.Join("/tmp", fmt.Sprintf("sandbar-%d-%s", os.Getuid(), teleportID(filepath.Dir(p.config))))
+		base := teleportShortControlDir(p, os.Getuid())
 		socket = filepath.Join(base, teleportID(d.Machine)+".sock")
 	}
 	return socket, filepath.Join(dir, "ssh.log"), nil
